@@ -1788,6 +1788,218 @@ def plot_post_lifespan(
 #         return aggregated_df
 
 
+def plot_post_count(
+    posts_file,
+    comments_file,          # Not used in this version; kept for interface consistency.
+    precovid_posts_file,
+    precovid_comments_file, # Not used in this version; kept for interface consistency.
+    city='',
+    resample_unit='W',  # e.g., 'W' for weekly, 'D' for daily, 'M' for monthly
+    save_plot=False,
+    plot_path='post_count_timeseries.png',
+    display_plot=True
+):
+    """
+    Plots the time series for the raw number of posts over time by combining pre-COVID
+    and main (COVID) datasets.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file containing at least 'id' and 'created_utc'.
+    comments_file : str
+        (Not used in this version; kept for consistency.)
+    precovid_posts_file : str
+        Path to the pre-COVID posts Parquet file.
+    precovid_comments_file : str
+        (Not used in this version; kept for consistency.)
+    city : str, optional
+        Name of the city for plot titling.
+    resample_unit : str, optional
+        Pandas resample frequency (default is 'W' for weekly).
+    save_plot : bool, optional
+        Whether to save the plot to disk.
+    plot_path : str, optional
+        File path where the plot should be saved if save_plot is True.
+    display_plot : bool, optional
+        Whether to display the plot interactively.
+
+    Returns
+    -------
+    None
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    def process_data(posts_file):
+        # Load posts data
+        print(f"Loading posts data from {posts_file}...")
+        posts = pd.read_parquet(posts_file, columns=['id', 'created_utc'])
+        print(f"Number of posts: {len(posts)}")
+
+        # Convert Unix timestamps to datetime
+        print("Converting timestamps...")
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+
+        # Sort posts by creation time
+        posts.sort_values('created_datetime', inplace=True)
+
+        # Set the creation datetime as the index for resampling
+        posts.set_index('created_datetime', inplace=True)
+
+        # Resample by creation time to count the number of posts per period
+        print(f"Resampling by '{resample_unit}' to compute the number of posts...")
+        post_counts = posts.resample(resample_unit).size()
+        return post_counts
+
+    # Process pre-COVID posts data and restrict to a desired period (e.g., Oct-Dec 2019)
+    print("Processing pre-COVID posts data...")
+    precovid_counts = process_data(precovid_posts_file)
+    precovid_counts = precovid_counts['2019-10-01':'2019-12-31']  # Adjust as needed
+
+    # Process main (COVID) posts data
+    print("Processing main posts data...")
+    main_counts = process_data(posts_file)
+
+    # Combine the two time series into one
+    print("Combining datasets...")
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    # Plotting the time series
+    print("Plotting the results...")
+    plt.figure(figsize=(12, 6))
+    combined_counts.plot(marker='o', linestyle='-', label='Number of Posts', color='blue')
+
+    # Mark the COVID start date (January 2020)
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel('Number of Posts')
+    plt.title(f'{city} Number of Posts Over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+    print("Done.")
+
+
+def plot_comment_count(
+    posts_file,
+    comments_file,
+    precovid_posts_file,
+    precovid_comments_file,
+    city='',
+    resample_unit='W',  # e.g., 'W' for weekly, 'D' for daily, 'M' for monthly
+    save_plot=False,
+    plot_path='comment_count_timeseries.png',
+    display_plot=True
+):
+    """
+    Plots the time series for the raw number of comments over time by combining pre-COVID
+    and main (COVID) datasets.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file.
+        (Not used in this version; retained for interface consistency.)
+    comments_file : str
+        Path to the main comments Parquet file containing 'parent_id' and 'created_utc'.
+    precovid_posts_file : str
+        Path to the pre-COVID posts Parquet file.
+        (Not used in this version; retained for interface consistency.)
+    precovid_comments_file : str
+        Path to the pre-COVID comments Parquet file.
+    city : str, optional
+        Name of the city (if applicable) to be displayed in the plot title.
+    resample_unit : str, optional
+        Pandas resample frequency (default is 'W' for weekly).
+    save_plot : bool, optional
+        Whether to save the plot to disk.
+    plot_path : str, optional
+        File path where the plot should be saved if save_plot is True.
+    display_plot : bool, optional
+        Whether to display the plot interactively.
+
+    Returns
+    -------
+    None
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    def process_data(comments_file):
+        # Load comments data
+        print(f"Loading comments data from {comments_file}...")
+        comments = pd.read_parquet(comments_file, columns=['parent_id', 'created_utc'])
+        print(f"Number of comments: {len(comments)}")
+
+        # Convert timestamps to datetime
+        print("Converting timestamps...")
+        comments['created_datetime'] = pd.to_datetime(comments['created_utc'], unit='s')
+
+        # Sort by creation time
+        comments.sort_values('created_datetime', inplace=True)
+
+        # Set the creation datetime as the index for resampling
+        comments.set_index('created_datetime', inplace=True)
+
+        # Resample by comment creation time to count the number of comments per period
+        print(f"Resampling by '{resample_unit}' to compute the number of comments...")
+        comment_counts = comments.resample(resample_unit).size()
+        return comment_counts
+
+    # Process pre-COVID comments data (e.g., restricting to Oct-Dec 2019)
+    print("Processing pre-COVID comments data...")
+    precovid_counts = process_data(precovid_comments_file)
+    precovid_counts = precovid_counts['2019-10-01':'2019-12-31']  # Adjust this window as needed
+
+    # Process main (COVID-era) comments data
+    print("Processing main comments data...")
+    main_counts = process_data(comments_file)
+
+    # Combine the two time series into one
+    print("Combining datasets...")
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    # Plotting the time series
+    print("Plotting the results...")
+    plt.figure(figsize=(12, 6))
+    combined_counts.plot(marker='o', linestyle='-', label='Number of Comments', color='blue')
+
+    # Mark the COVID start date (January 2020)
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel('Number of Comments')
+    plt.title(f'{city} Number of Comments Over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+    print("Done.")
+
+
 def plot_post_lifespan_timeseries(
     posts_parquet_path,
     comments_parquet_path,
@@ -2166,6 +2378,123 @@ def plot_response_times(posts_file, comments_file, city='', time_unit='W', time_
         plt.close()
 
 
+def plot_response_times_with_cutoff(
+    posts_file,
+    comments_file,
+    city='',
+    time_unit='W',
+    time_diff_unit='minutes',
+    save_plot=False,
+    plot_path='average_response_times.png',
+    display_plot=True
+):
+    """
+    Plots the average response times of city subreddit posts, excluding responses
+    that occur more than 24 hours after a post is made.
+
+    Parameters:
+    - posts_file (str): Path to the posts Parquet file.
+    - comments_file (str): Path to the comments Parquet file.
+    - city (str): City name for the plot title.
+    - time_unit (str): Resampling frequency (e.g., 'W' for weekly, 'M' for monthly).
+    - time_diff_unit (str): Unit for response time ('seconds', 'minutes', 'hours', 'days').
+    - save_plot (bool): Whether to save the plot to a file.
+    - plot_path (str): File path to save the plot.
+    - display_plot (bool): Whether to display the plot.
+
+    Returns:
+    - None: Displays and optionally saves a plot of average response times.
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    # Step 1: Read the posts and comments data
+    print("Reading posts data...")
+    posts = pd.read_parquet(posts_file, columns=['id', 'created_utc'])
+    print(f"Number of posts: {len(posts)}")
+
+    print("Reading comments data...")
+    comments = pd.read_parquet(comments_file, columns=['parent_id', 'created_utc'])
+    print(f"Number of comments: {len(comments)}")
+
+    # Step 2: Rename 'created_utc' columns to avoid confusion after merge
+    print("Renaming 'created_utc' columns...")
+    posts = posts.rename(columns={'created_utc': 'created_utc_post'})
+    comments = comments.rename(columns={'created_utc': 'created_utc_comment'})
+
+    # Step 3: Prepare the posts DataFrame
+    print("Preparing posts data...")
+    posts['parent_id'] = 't3_' + posts['id']  # Reddit post IDs are prefixed with 't3_'
+    posts['created_datetime_post'] = pd.to_datetime(posts['created_utc_post'], unit='s')
+
+    # Step 4: Merge comments with posts to associate each comment with its post
+    print("Merging comments with posts...")
+    merged = comments.merge(
+        posts[['parent_id', 'created_datetime_post', 'created_utc_post']],
+        on='parent_id',
+        how='inner'
+    )
+    print(f"Merged DataFrame size: {merged.shape}")
+
+    # Step 5: Identify the first comment for each post
+    print("Identifying first comments for each post...")
+    merged_sorted = merged.sort_values(['parent_id', 'created_utc_comment'])
+    first_comments = merged_sorted.groupby('parent_id').first().reset_index()
+    print(f"Number of posts with at least one comment: {len(first_comments)}")
+
+    # Step 6: Calculate the response time in seconds
+    print("Calculating response times...")
+    first_comments['response_time_seconds'] = (
+        first_comments['created_utc_comment'] - first_comments['created_utc_post']
+    )
+
+    # Step 7: Filter out responses that occur more than 24 hours (86,400 seconds) after the post
+    first_comments = first_comments[first_comments['response_time_seconds'] <= 86400]
+
+    # Step 8: Convert response time to the desired unit and define y-axis label
+    if time_diff_unit == 'seconds':
+        first_comments['response_time'] = first_comments['response_time_seconds']
+        ylabel = 'Average Response Time (Seconds)'
+    elif time_diff_unit == 'minutes':
+        first_comments['response_time'] = first_comments['response_time_seconds'] / 60
+        ylabel = 'Average Response Time (Minutes)'
+    elif time_diff_unit == 'hours':
+        first_comments['response_time'] = first_comments['response_time_seconds'] / 3600
+        ylabel = 'Average Response Time (Hours)'
+    elif time_diff_unit == 'days':
+        first_comments['response_time'] = first_comments['response_time_seconds'] / 86400
+        ylabel = 'Average Response Time (Days)'
+    else:
+        raise ValueError("Unsupported time_diff_unit. Choose from 'seconds', 'minutes', 'hours', or 'days'.")
+
+    # Step 9: Set the post creation time as the DataFrame index
+    first_comments['created_datetime_post'] = pd.to_datetime(first_comments['created_datetime_post'])
+    first_comments.set_index('created_datetime_post', inplace=True)
+
+    # Step 10: Resample the data and compute the average response time per period
+    print(f"Resampling data with time unit: {time_unit}")
+    avg_response = first_comments['response_time'].resample(time_unit).mean()
+
+    # Step 11: Plot the results
+    print("Plotting the average response times with cutoff...")
+    plt.figure(figsize=(12, 6))
+    avg_response.plot(marker='o', linestyle='-')
+    plt.xlabel('Time')
+    plt.ylabel(ylabel)
+    plt.title(f'{city} Average Response Times (Responses within 24 Hours) Over Time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+
 def plot_comment_percentage(posts_file, comments_file, city='', time_unit='W', save_plot=False, plot_path='comment_percentage.png', display_plot=True):
     """
     Plots the percentage of posts that receive at least one comment, aggregated by a specified time interval (weekly or monthly).
@@ -2231,223 +2560,6 @@ def plot_comment_percentage(posts_file, comments_file, city='', time_unit='W', s
     else:
         # Otherwise, close the plot so it doesn't block execution
         plt.close()
-
-
-# def plot_comment_percentage_time_window(
-#     posts_file,
-#     comments_file,
-#     city='',
-#     resample_unit='W',         # e.g., 'W' for weekly, 'D' for daily, 'M' for monthly (for plotting)
-#     save_plot=False,
-#     plot_path='comment_percentage_7day.png',
-#     display_plot=True
-# ):
-#     """
-#     Plots the percentage of posts that receive at least one comment within 7 days of the post's creation time.
-    
-#     Steps:
-#       1. Load posts and comments.
-#       2. For each post, define a 7-day window: [post_time, post_time + 7 days).
-#       3. Check if there is at least one comment in that window (with the same parent_id).
-#       4. Resample by 'resample_unit' based on post creation time to compute the percentage of 
-#          posts that have comments within 7 days.
-#       5. Plot the result over time.
-
-#     Parameters:
-#     - posts_file (str): Path to the posts Parquet file.
-#     - comments_file (str): Path to the comments Parquet file.
-#     - city (str): Optional label for the plot title.
-#     - resample_unit (str): Time unit for aggregating the final percentage (e.g., 'W', 'D', 'M').
-#     - save_plot (bool): Whether to save the resulting plot.
-#     - plot_path (str): Path to save the plot if save_plot is True.
-#     - display_plot (bool): Whether to display the plot.
-
-#     Returns:
-#     - None: Displays and optionally saves a plot of the percentage of posts with at least 
-#             one comment within 7 days.
-#     """
-
-#     # 1. Load posts and comments
-#     print("Loading posts data...")
-#     posts = pd.read_parquet(posts_file, columns=['id', 'created_utc'])
-#     print(f"Number of posts: {len(posts)}")
-
-#     print("Loading comments data...")
-#     comments = pd.read_parquet(comments_file, columns=['parent_id', 'created_utc'])
-#     print(f"Number of comments: {len(comments)}")
-
-#     # 2. Convert timestamps to datetime
-#     print("Converting timestamps...")
-#     posts['created_datetime_post'] = pd.to_datetime(posts['created_utc'], unit='s')
-#     comments['created_datetime_comment'] = pd.to_datetime(comments['created_utc'], unit='s')
-
-#     # 3. Attach 'parent_id' in posts (t3_ prefix)
-#     #    Then we'll group comments by parent_id to speed up matching.
-#     posts['parent_id'] = 't3_' + posts['id']
-
-#     # 4. Sort data by time (helps with searching in time windows if we want to do more optimized searches)
-#     posts.sort_values('created_datetime_post', inplace=True)
-#     comments.sort_values('created_datetime_comment', inplace=True)
-
-#     # 5. Group comments by parent_id to check only the relevant comments for each post.
-#     comment_groups = comments.groupby('parent_id')['created_datetime_comment']
-
-#     # 6. For each post, check if there's at least one comment in [post_time, post_time + 7 days).
-#     print("Checking comments in [post_time, post_time + 7 days) for each post...")
-#     def has_comment_in_7day_window(row):
-#         pid = row['parent_id']
-#         post_time = row['created_datetime_post']
-#         window_end = post_time + pd.Timedelta(days=7)
-
-#         # Get all comment times for this parent_id (if none, return False quickly)
-#         if pid not in comment_groups.groups:
-#             return False
-#         c_times = comment_groups.get_group(pid)
-
-#         # Check if there's at least one comment in the 7-day interval
-#         # (c_times is already sorted)
-#         # For a large dataset, you might want to use a binary search approach.
-#         # Naive approach:
-#         in_window = c_times[(c_times >= post_time) & (c_times < window_end)]
-#         return len(in_window) > 0
-
-#     # Apply the function to each post row
-#     posts['has_comment_7day'] = posts.apply(has_comment_in_7day_window, axis=1)
-
-#     # 7. Resample by post creation time to compute the percentage
-#     print(f"Resampling by '{resample_unit}' to compute the percentage of posts with 7-day comments...")
-#     # First, set posts' creation time as index for resampling
-#     posts.set_index('created_datetime_post', inplace=True)
-
-#     total_posts = posts.resample(resample_unit).size()
-#     commented_posts = posts[posts['has_comment_7day']].resample(resample_unit).size()
-
-#     percentage_with_comments = (commented_posts / total_posts) * 100
-
-#     # 8. Plot
-#     print("Plotting the results...")
-#     plt.figure(figsize=(12, 6))
-#     percentage_with_comments.plot(marker='o', linestyle='-')
-#     plt.xlabel('Time')
-#     plt.ylabel('Percentage of Posts with Comments Within 7 Days (%)')
-#     plt.title(f'{city} Percentage of Posts Receiving Comments Within 7 Days')
-#     plt.grid(True)
-#     plt.tight_layout()
-
-#     if save_plot:
-#         plt.savefig(plot_path)
-#         print(f"Plot saved to {plot_path}")
-
-#     if display_plot:
-#         plt.show()
-#     else:
-#         plt.close()
-
-#     print("Done.")
-    
-
-# def plot_comment_percentage_time_window(
-#     posts_file,
-#     comments_file,
-#     precovid_posts_file,
-#     precovid_comments_file,
-#     city='',
-#     resample_unit='W',  # e.g., 'W' for weekly, 'D' for daily, 'M' for monthly (for plotting)
-#     save_plot=False,
-#     plot_path='comment_percentage_7day.png',
-#     display_plot=True
-# ):
-#     """
-#     Plots the percentage of posts that receive at least one comment within 7 days of the post's creation time.
-#     Includes comparison with a pre-COVID data period (Oct 2019 - Dec 2019).
-#     """
-#     import pandas as pd
-#     import matplotlib.pyplot as plt
-    
-#     def process_data(posts_file, comments_file):
-#         # Load posts and comments
-#         print(f"Loading posts data from {posts_file}...")
-#         posts = pd.read_parquet(posts_file, columns=['id', 'created_utc'])
-#         print(f"Number of posts: {len(posts)}")
-
-#         print(f"Loading comments data from {comments_file}...")
-#         comments = pd.read_parquet(comments_file, columns=['parent_id', 'created_utc'])
-#         print(f"Number of comments: {len(comments)}")
-
-#         # Convert timestamps to datetime
-#         print("Converting timestamps...")
-#         posts['created_datetime_post'] = pd.to_datetime(posts['created_utc'], unit='s')
-#         comments['created_datetime_comment'] = pd.to_datetime(comments['created_utc'], unit='s')
-
-#         # Attach 'parent_id' in posts
-#         posts['parent_id'] = 't3_' + posts['id']
-
-#         # Sort data by time
-#         posts.sort_values('created_datetime_post', inplace=True)
-#         comments.sort_values('created_datetime_comment', inplace=True)
-
-#         # Group comments by parent_id
-#         comment_groups = comments.groupby('parent_id')['created_datetime_comment']
-
-#         # Check if there's at least one comment in [post_time, post_time + 7 days)
-#         print("Checking comments in [post_time, post_time + 7 days) for each post...")
-
-#         def has_comment_in_7day_window(row):
-#             pid = row['parent_id']
-#             post_time = row['created_datetime_post']
-#             window_end = post_time + pd.Timedelta(days=7)
-
-#             # Get all comment times for this parent_id
-#             if pid not in comment_groups.groups:
-#                 return False
-#             c_times = comment_groups.get_group(pid)
-
-#             # Check for comments in the time window
-#             in_window = c_times[(c_times >= post_time) & (c_times < window_end)]
-#             return len(in_window) > 0
-
-#         posts['has_comment_7day'] = posts.apply(has_comment_in_7day_window, axis=1)
-
-#         # Resample by post creation time to compute the percentage
-#         print(f"Resampling by '{resample_unit}' to compute the percentage of posts with 7-day comments...")
-#         posts.set_index('created_datetime_post', inplace=True)
-#         total_posts = posts.resample(resample_unit).size()
-#         commented_posts = posts[posts['has_comment_7day']].resample(resample_unit).size()
-#         percentage_with_comments = (commented_posts / total_posts) * 100
-
-#         return percentage_with_comments
-
-#     # Process main data
-#     print("Processing main data...")
-#     main_percentage = process_data(posts_file, comments_file)
-
-#     # Process pre-COVID data
-#     print("Processing pre-COVID data...")
-#     precovid_percentage = process_data(precovid_posts_file, precovid_comments_file)
-#     precovid_percentage = precovid_percentage['2019-10-01':'2019-12-31']  # Oct to Dec 2019
-
-#     # Plot
-#     print("Plotting the results...")
-#     plt.figure(figsize=(12, 6))
-#     main_percentage.plot(marker='o', linestyle='-', label='During COVID')
-#     precovid_percentage.plot(marker='x', linestyle='--', label='Pre-COVID')
-#     plt.xlabel('Time')
-#     plt.ylabel('Percentage of Posts with Comments Within 7 Days (%)')
-#     plt.title(f'{city} Percentage of Posts Receiving Comments Within 7 Days')
-#     plt.legend()
-#     plt.grid(True)
-#     plt.tight_layout()
-
-#     if save_plot:
-#         plt.savefig(plot_path)
-#         print(f"Plot saved to {plot_path}")
-
-#     if display_plot:
-#         plt.show()
-#     else:
-#         plt.close()
-
-#     print("Done.")
 
 
 def plot_comment_percentage_time_window(
@@ -2931,17 +3043,55 @@ def generate_graphs_for_cities(city_dict):
         #     display_plot=False
         # )
 
-        plot_comment_percentage_time_window(
+        # plot_comment_percentage_time_window(
+        #     submissions_path,
+        #     comments_path,
+        #     precovid_submissions_path,
+        #     precovid_comments_path,
+        #     city=city_name,
+        #     resample_unit='W',  # 'W' for weekly, 'D' for daily, 'M' for monthly, etc.
+        #     save_plot=True,
+        #     plot_path=f'../graphs/{city_key}_comment_percentage_same_week.png',
+        #     display_plot=False
+        # )
+
+        # plot_post_count(
+        #     submissions_path, 
+        #     comments_path,
+        #     precovid_submissions_path,
+        #     precovid_comments_path, 
+        #     city=city_name, 
+        #     resample_unit='W', 
+        #     save_plot=True, 
+        #     plot_path=f'../graphs/{city_key}_post_count_timeseries.png', 
+        #     display_plot=False
+        # )
+
+        # plt.clf()
+
+        # plot_comment_count(
+        #     submissions_path, 
+        #     comments_path,
+        #     precovid_submissions_path, 
+        #     precovid_comments_path, 
+        #     city=city_name, 
+        #     resample_unit='W', 
+        #     save_plot=True, 
+        #     plot_path=f'../graphs/{city_key}_comment_count_timeseries.png', 
+        #     display_plot=False
+        # )
+
+        plot_response_times_with_cutoff(
             submissions_path,
             comments_path,
-            precovid_submissions_path,
-            precovid_comments_path,
             city=city_name,
-            resample_unit='W',  # 'W' for weekly, 'D' for daily, 'M' for monthly, etc.
+            time_unit='W',
+            time_diff_unit='hours',
             save_plot=True,
-            plot_path=f'../graphs/{city_key}_comment_percentage_same_week.png',
+            plot_path=f'../graphs/{city_key}_average_response_times_cutoff.png',
             display_plot=False
         )
+
         plt.clf()
 
         # # --- Plot response times ---
@@ -3184,6 +3334,165 @@ def generate_graphs_for_cities(city_dict):
 #     metrics_table.to_parquet(output_path, index=True)
 
 #     print("Metrics saved successfully.")
+
+def get_raw_post_count_metrics(
+    posts_file,
+    comments_file,         # Not used in this version
+    precovid_posts_file,
+    precovid_comments_file,  # Not used in this version
+    city='',
+    resample_unit='W'  # Default is weekly ('W')
+):
+    """
+    Calculates and returns the raw number of posts metrics for both pre-COVID and main datasets.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file containing 'id' and 'created_utc'.
+    comments_file : str
+        (Not used in this version, kept for consistency.)
+    precovid_posts_file : str
+        Path to the pre-COVID posts Parquet file.
+    precovid_comments_file : str
+        (Not used in this version, kept for consistency.)
+    city : str, optional
+        (Not used in this version.)
+    resample_unit : str, optional
+        Pandas resample frequency (default 'W' for weekly).
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame where the row is labeled 'Raw Number of Posts'
+        and columns are date strings (DD/MM/YYYY).
+    """
+    import pandas as pd
+
+    def process_posts(posts_path):
+        # Load posts data
+        posts = pd.read_parquet(posts_path, columns=['id', 'created_utc'])
+
+        # Convert timestamps to datetime
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+
+        # Sort data by time
+        posts.sort_values('created_datetime', inplace=True)
+
+        # Set the datetime as index for resampling
+        posts.set_index('created_datetime', inplace=True)
+
+        # Resample by post creation time to count the number of posts
+        post_counts = posts.resample(resample_unit).size()
+        return post_counts
+
+    # Process pre-COVID data (restricting date range if needed)
+    precovid_counts = process_posts(precovid_posts_file)
+    # For example, here we restrict the pre-COVID period to 2016-01-01 through 2019-12-31
+    precovid_counts = precovid_counts['2016-01-01':'2019-12-31']
+
+    # Process main (COVID) data
+    main_counts = process_posts(posts_file)
+
+    # Combine the two time series
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    # Reindex to ensure a continuous time index across the whole period
+    full_index = pd.date_range(
+        start=combined_counts.index.min(),
+        end=combined_counts.index.max(),
+        freq=resample_unit
+    )
+    combined_counts = combined_counts.reindex(full_index).fillna(0)
+
+    # Prepare the final metrics table with dates formatted as DD/MM/YYYY
+    metrics_table = pd.DataFrame(
+        {'Raw Number of Posts': combined_counts.values},
+        index=combined_counts.index.strftime('%d/%m/%Y')
+    ).transpose()
+
+    return metrics_table
+
+
+def get_raw_comment_count_metrics(
+    posts_file,
+    comments_file,
+    precovid_posts_file,
+    precovid_comments_file,
+    city='',
+    resample_unit='W'  # Default is weekly ('W')
+):
+    """
+    Calculates and returns the raw number of comments metrics for both pre-COVID and main datasets.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file.
+        (Not used in this version, retained for interface consistency.)
+    comments_file : str
+        Path to the main comments Parquet file containing 'parent_id' and 'created_utc'.
+    precovid_posts_file : str
+        Path to the pre-COVID posts Parquet file.
+        (Not used in this version, retained for interface consistency.)
+    precovid_comments_file : str
+        Path to the pre-COVID comments Parquet file.
+    city : str, optional
+        (Not used in this version.)
+    resample_unit : str, optional
+        Pandas resample frequency (default 'W' for weekly).
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame where the row is labeled 'Raw Number of Comments'
+        and the columns are date strings in the format 'DD/MM/YYYY'.
+    """
+    import pandas as pd
+
+    def process_comments(comments_path):
+        # Load comments data
+        comments = pd.read_parquet(comments_path, columns=['parent_id', 'created_utc'])
+        
+        # Convert timestamps to datetime
+        comments['created_datetime'] = pd.to_datetime(comments['created_utc'], unit='s')
+        
+        # Sort the data by creation time
+        comments.sort_values('created_datetime', inplace=True)
+        
+        # Set the datetime as the index for resampling
+        comments.set_index('created_datetime', inplace=True)
+        
+        # Resample by the creation time to count the number of comments per period
+        comment_counts = comments.resample(resample_unit).size()
+        return comment_counts
+
+    # Process the pre-COVID comments and restrict the period if necessary.
+    precovid_counts = process_comments(precovid_comments_file)
+    # Example: restrict pre-COVID period to 2016-01-01 through 2019-12-31.
+    precovid_counts = precovid_counts['2016-01-01':'2019-12-31']
+
+    # Process the main (COVID) comments
+    main_counts = process_comments(comments_file)
+
+    # Combine the two time series
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    # Reindex to ensure a continuous time index across the entire period.
+    full_index = pd.date_range(
+        start=combined_counts.index.min(),
+        end=combined_counts.index.max(),
+        freq=resample_unit
+    )
+    combined_counts = combined_counts.reindex(full_index).fillna(0)
+
+    # Prepare the final metrics table with dates formatted as DD/MM/YYYY.
+    metrics_table = pd.DataFrame(
+        {'Raw Number of Comments': combined_counts.values},
+        index=combined_counts.index.strftime('%d/%m/%Y')
+    ).transpose()
+
+    return metrics_table
 
 
 def get_comment_percentage_metrics(
@@ -3879,6 +4188,146 @@ def get_response_times_data(
     return metrics_df
 
 
+def get_response_times_data_with_cutoff(
+    posts_file,
+    comments_file,
+    precovid_posts_file,
+    precovid_comments_file,
+    city='',
+    time_unit='W',
+    time_diff_unit='minutes'
+):
+    """
+    Calculates the average response times for both pre-COVID and main datasets, 
+    excluding any responses that occur more than 24 hours after a post is made.
+    The resulting series are combined into a single-row DataFrame.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file.
+    comments_file : str
+        Path to the main comments Parquet file.
+    precovid_posts_file : str
+        Path to the pre-COVID posts Parquet file.
+    precovid_comments_file : str
+        Path to the pre-COVID comments Parquet file.
+    city : str, optional
+        Name of the city (unused in this version; kept for consistency).
+    time_unit : str, optional
+        Resampling frequency (default 'W' for weekly). Other options: 'D' (daily), 'M' (monthly), etc.
+    time_diff_unit : str, optional
+        Unit for response time. One of: 'seconds', 'minutes', 'hours', 'days'.
+
+    Returns
+    -------
+    pd.DataFrame
+        A single-row DataFrame with columns as date strings (DD/MM/YYYY)
+        and the row labeled as 'Average Response Time (...)'.
+    """
+    import pandas as pd
+
+    def process_data(one_posts_file, one_comments_file):
+        print(f"Reading posts data from {one_posts_file}...")
+        posts = pd.read_parquet(one_posts_file, columns=['id', 'created_utc'])
+        print(f"Number of posts: {len(posts)}")
+        
+        print(f"Reading comments data from {one_comments_file}...")
+        comments = pd.read_parquet(one_comments_file, columns=['parent_id', 'created_utc'])
+        print(f"Number of comments: {len(comments)}")
+        
+        # Rename timestamps for clarity
+        posts.rename(columns={'created_utc': 'created_utc_post'}, inplace=True)
+        comments.rename(columns={'created_utc': 'created_utc_comment'}, inplace=True)
+        
+        # Convert timestamps to datetime
+        posts['created_datetime_post'] = pd.to_datetime(posts['created_utc_post'], unit='s')
+        comments['created_datetime_comment'] = pd.to_datetime(comments['created_utc_comment'], unit='s')
+        
+        # Add the Reddit 't3_' prefix to match the comment parent IDs
+        posts['parent_id'] = 't3_' + posts['id']
+        
+        # Merge comments with posts based on parent_id
+        merged = comments.merge(
+            posts[['parent_id', 'created_datetime_post', 'created_utc_post']],
+            on='parent_id',
+            how='inner'
+        )
+        
+        # Sort by post and comment time to identify the first comment per post
+        merged_sorted = merged.sort_values(['parent_id', 'created_datetime_comment'])
+        first_comments = merged_sorted.groupby('parent_id').first().reset_index()
+        
+        # Calculate response time (as a timedelta in seconds)
+        first_comments['response_time_seconds'] = (
+            first_comments['created_datetime_comment'] - first_comments['created_datetime_post']
+        ).dt.total_seconds()
+        
+        # Apply cutoff: Exclude responses that took more than 24 hours (86400 seconds)
+        first_comments = first_comments[first_comments['response_time_seconds'] <= 86400]
+        
+        # Convert response time to the desired unit
+        if time_diff_unit == 'seconds':
+            first_comments['response_time'] = first_comments['response_time_seconds']
+        elif time_diff_unit == 'minutes':
+            first_comments['response_time'] = first_comments['response_time_seconds'] / 60
+        elif time_diff_unit == 'hours':
+            first_comments['response_time'] = first_comments['response_time_seconds'] / 3600
+        elif time_diff_unit == 'days':
+            first_comments['response_time'] = first_comments['response_time_seconds'] / 86400
+        else:
+            raise ValueError("Unsupported time_diff_unit. Choose from 'seconds', 'minutes', 'hours', 'days'.")
+        
+        # Resample on the post creation time to compute the average response time per period
+        first_comments.set_index('created_datetime_post', inplace=True)
+        avg_response = first_comments['response_time'].resample(time_unit).mean()
+        
+        return avg_response
+
+    print("Processing pre-COVID data...")
+    precovid_series = process_data(precovid_posts_file, precovid_comments_file)
+    # Optionally restrict pre-COVID data to a desired time range
+    precovid_series = precovid_series['2016-01-01':'2019-12-31']
+    
+    print("Processing main data...")
+    main_series = process_data(posts_file, comments_file)
+    
+    # Combine the pre-COVID and main datasets
+    combined_series = pd.concat([precovid_series, main_series])
+    
+    # Ensure a continuous date range
+    full_index = pd.date_range(
+        start=combined_series.index.min(),
+        end=combined_series.index.max(),
+        freq=time_unit
+    )
+    combined_series = combined_series.reindex(full_index)
+    
+    # Interpolate any missing values
+    combined_series = combined_series.interpolate()
+    
+    # Set the row label based on the time_diff_unit
+    if time_diff_unit == 'seconds':
+        row_label = 'Average Response Time with Cutoff (Seconds)'
+    elif time_diff_unit == 'minutes':
+        row_label = 'Average Response Time with Cutoff (Minutes)'
+    elif time_diff_unit == 'hours':
+        row_label = 'Average Response Time with Cutoff (Hours)'
+    elif time_diff_unit == 'days':
+        row_label = 'Average Response Time with Cutoff (Days)'
+    else:
+        row_label = 'Average Response Time'
+    
+    # Create a single-row DataFrame with dates as column headers (formatted as DD/MM/YYYY)
+    metrics_df = pd.DataFrame(
+        {row_label: combined_series.values},
+        index=combined_series.index.strftime('%d/%m/%Y')
+    ).transpose()
+    
+    print("Response time data (with 24-hour cutoff) for pre-COVID and main datasets combined. Returning DataFrame...")
+    return metrics_df
+
+
 def save_timeseries_metrics_for_cities(city_dict):
     # Create the output directory if it doesn't exist
     output_dir = "../metrics"
@@ -3905,7 +4354,25 @@ def save_timeseries_metrics_for_cities(city_dict):
         #     output_folder=output_dir
         # )
 
-        comment_percentage_metrics = (get_comment_percentage_metrics(
+        post_count_metrics = get_raw_post_count_metrics(
+            submissions_path,
+            comments_path,
+            prophet_train_submissions_path,
+            prophet_train_comments_path,
+            city=city_lower,
+            resample_unit='W'  # Default is weekly ('W')
+        )
+
+        comment_count_metrics = get_raw_comment_count_metrics(
+            submissions_path,
+            comments_path,
+            prophet_train_submissions_path,
+            prophet_train_comments_path,
+            city=city_lower,
+            resample_unit='W'  # Default is weekly ('W')
+        )
+
+        comment_percentage_metrics = get_comment_percentage_metrics(
             submissions_path,
             comments_path,
             # precovid_submissions_path,
@@ -3914,7 +4381,7 @@ def save_timeseries_metrics_for_cities(city_dict):
             prophet_train_comments_path,
             city=city_lower,
             resample_unit='W'  # Default is weekly ('W')
-        ))
+        )
 
         lifespan_metrics = get_post_lifespan_timeseries(
             submissions_path,
@@ -3941,9 +4408,19 @@ def save_timeseries_metrics_for_cities(city_dict):
             time_diff_unit='minutes'
         )
 
+        cutoff_response_metrics = get_response_times_data_with_cutoff(
+            submissions_path,
+            comments_path,
+            prophet_train_submissions_path,
+            prophet_train_comments_path,
+            city=city_lower,
+            time_unit='W',
+            time_diff_unit='minutes'
+        )
+
         # 3) Concatenate the two single-row DataFrames into one
         #    Each metric is a separate row; columns are dates.
-        combined_metrics = pd.concat([comment_percentage_metrics, lifespan_metrics, response_metrics], axis=0)
+        combined_metrics = pd.concat([post_count_metrics, comment_count_metrics, comment_percentage_metrics, lifespan_metrics, response_metrics, cutoff_response_metrics], axis=0)
         output_path = os.path.join(output_dir, f"{city_lower}_metrics.parquet")
         combined_metrics.to_parquet(output_path)
 
@@ -4196,7 +4673,8 @@ def cluster_cities_with_dtw_pyclustering(
     metric_name,
     resample_unit='W',
     max_clusters=10,
-    n_jobs=-1
+    n_jobs=-1,
+    selected_cities=None
 ):
     """
     Performs DTW clustering on a specified metric (column) in city time series data 
@@ -4234,6 +4712,12 @@ def cluster_cities_with_dtw_pyclustering(
         # Now, df's rows = dates, df's columns = metric names
         df = df.T
         df.index.name = "datetime"
+
+        df.index = pd.to_datetime(df.index)  # Ensure DatetimeIndex
+        df = df.sort_index()  # Ensure it's sorted
+
+        # Print to debug
+        print(df.index.min(), df.index.max())
 
         # Filter date range
         df = df.loc["2020-01-01":"2021-12-31"]
@@ -4319,12 +4803,62 @@ def cluster_cities_with_dtw_pyclustering(
 
     # ---------------------- Main Pipeline ------------------------ #
     print("Gathering city files...")
-    city_files = [
+    # city_files = [
+    #     os.path.join(city_files_folder, f)
+    #     for f in os.listdir(city_files_folder)
+    #     if f.endswith('.parquet')
+    # ]
+    # city_names = [os.path.splitext(os.path.basename(f))[0] for f in city_files]
+
+    # if selected_cities is not None:
+    #     selected_city_files = []
+    #     selected_city_names = []
+    #     for f, name in zip(city_files, city_names):
+    #         base_name = name.replace("_metrics", "")
+    #         if base_name in selected_cities:
+    #             selected_city_files.append(f)
+    #             selected_city_names.append(name)
+    #     if not selected_city_files:
+    #         raise ValueError("None of the selected cities were found in the provided folder.")
+    #     else:
+    #         city_files = selected_city_files
+    #         city_names = selected_city_names
+
+    # print(city_files)
+    # print(city_names)
+
+    all_files = [
         os.path.join(city_files_folder, f)
         for f in os.listdir(city_files_folder)
         if f.endswith('.parquet')
     ]
-    city_names = [os.path.splitext(os.path.basename(f))[0] for f in city_files]
+    # Derive city names from file names (without extension)
+    all_city_names = [os.path.splitext(os.path.basename(f))[0] for f in all_files]
+
+    # If selected cities are provided, convert them to lowercase for robust matching.
+    if selected_cities is not None:
+        if isinstance(selected_cities, str):
+            selected_cities = [selected_cities]
+        selected_cities = [s.lower() for s in selected_cities]
+
+        filtered_files = []
+        filtered_names = []
+        for f, name in zip(all_files, all_city_names):
+            # Remove '_metrics' from the name and compare in lowercase
+            base_name = name.replace("_metrics", "").lower()
+            if base_name in selected_cities:
+                filtered_files.append(f)
+                filtered_names.append(name)
+        if not filtered_files:
+            raise ValueError("None of the selected cities were found in the provided folder.")
+        else:
+            print(f"Selected cities found: {[n.replace('_metrics','') for n in filtered_names]}")
+        city_files = filtered_files
+        city_names = filtered_names
+    else:
+        city_files = all_files
+        city_names = all_city_names
+
 
     output_dir = os.path.dirname(output_file) or "."
     os.makedirs(output_dir, exist_ok=True)
@@ -5737,6 +6271,8 @@ if __name__ == "__main__":
         "winstonsalem": 3890,
     }
     
+    comment_percentage_cluster_0 = ['honolulu', 'chicago', 'newyorkcity', 'atlanta', 'laredo', 'glendale', 'aurora', 'newark', 'miami', 'corpuschristi', 'boise', 'losangeles', 'scottsdale', 'riverside', 'santaclarita', 'saintpaul', 'stockton', 'fortworth', 'houston', 'philadelphia']
+
     precovid_start_str = '2019-07-01'
     precovid_end_str = '2019-12-31'
 
@@ -5751,8 +6287,8 @@ if __name__ == "__main__":
     nyc_precovid_submissions_path = f"../precovid_data_parquet/newyorkcity_submissions.parquet"
     nyc_precovid_comments_path = f"../precovid_data_parquet/newyorkcity_comments.parquet"
 
-    # df = pd.read_parquet("../response_clusters.parquet")
-    # cluster = [df["City"][i] for i,j in enumerate(df["Cluster"]) if j == 0]
+    # df = pd.read_parquet("../comments_percentage_subclusters.parquet")
+    # cluster = [df["City"][i] for i,j in enumerate(df["Cluster"]) if j ==0]
     # print(cluster, len(cluster))
 
     # for city in cities:
@@ -5812,7 +6348,28 @@ if __name__ == "__main__":
     #     output_plot_path="../response_cluster_forecast.png"
     # )
 
-    predict_and_plot_time_series("../metrics/losangeles_metrics.parquet", "Average Response Time (Minutes)", "../losangeles_response_prophet.png")
+    # predict_and_plot_time_series("../metrics/losangeles_metrics.parquet", "Average Response Time (Minutes)", "../losangeles_response_prophet.png")
+
+    # cluster_cities_with_dtw_pyclustering(
+    #     city_files_folder="../metrics",
+    #     output_file="../comments_percentage_subclusters.parquet",
+    #     metric_name="Percentage of Posts with Comments",
+    #     resample_unit="W",
+    #     max_clusters=10,
+    #     n_jobs=-1,
+    #     selected_cities = comment_percentage_cluster_0
+    # )
+
+    cluster_cities_with_dtw_pyclustering(
+        city_files_folder="../metrics",
+        output_file="../response_cutoff_clusters.parquet",
+        # metric_name="Average Response Time with Cutoff (Minutes)",
+        metric_name="Average Response Time (Minutes)",
+        resample_unit="W",
+        max_clusters=10,
+        n_jobs=-1,
+        selected_cities=None
+    )
 
     # aggregate_metrics_by_cluster(
     #     metrics_path="../metrics",
@@ -5858,6 +6415,29 @@ if __name__ == "__main__":
     #     resample_unit='W',  # 'W' for weekly, 'D' for daily, 'M' for monthly, etc.
     #     save_plot=True,
     #     plot_path=f'../newyorkcity_comment_percentage_same_week.png',
+    #     display_plot=False
+    # )
+
+    # plot_post_count(
+    #     nyc_submissions_path, 
+    #     nyc_comments_path,
+    #     nyc_precovid_submissions_path,
+    #     nyc_precovid_comments_path, 
+    #     city="newyorkcity", 
+    #     resample_unit='W', 
+    #     save_plot=True, 
+    #     plot_path=f'../newyorkcity_post_count.png', 
+    #     display_plot=False
+    # )
+
+    # plot_response_times_with_cutoff(
+    #     nyc_submissions_path,
+    #     nyc_comments_path,
+    #     city="newyorkcity",
+    #     time_unit='W',
+    #     time_diff_unit='hours',
+    #     save_plot=True,
+    #     plot_path='../newyorkcity_average_response_times_cutoff.png',
     #     display_plot=False
     # )
 
