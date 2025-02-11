@@ -1,6 +1,10 @@
 import re
 from collections import defaultdict
-
+import os
+import pandas as pd
+import numpy as np
+import glob
+import json
 
 def load_liwc_dictionary(dictionary_path):
     liwc_dict = {}
@@ -38,17 +42,17 @@ def analyze_text(text, liwc_dict):
 
 def analyze_emotions(text, liwc_dict, emotion_codes):
     tokens = tokenize(text)
-    print(tokens)
+    # print(tokens)
     total_words = len(tokens)
     
     emotion_counts = defaultdict(int)
     
     for token in tokens:
         if token in liwc_dict:
-            print(token, liwc_dict[token])
+            # print(token, liwc_dict[token])
             for code in liwc_dict[token]:
                 if code in emotion_codes.values():
-                    print(f"Token: {token} matched emotion code: {code}")
+                    # print(f"Token: {token} matched emotion code: {code}")
                     emotion_counts[code] += 1
     
     emotion_percentages = {code: (count / total_words * 100) for code, count in emotion_counts.items()}
@@ -73,12 +77,32 @@ def load_category_mapping(mapping_file_path):
     return category_map
 
 
+def analyze_emotion(text, liwc_dict, category_map, emotion_word):
+    tokens = tokenize(text)
+    total_words = len(tokens)
+    
+    if total_words == 0:
+        return 0
+
+    count = 0
+    for token in tokens:
+        if token in liwc_dict:
+            for code in liwc_dict[token]:
+                if category_map.get(code, "").lower() == emotion_word.lower():
+                    count += 1
+
+    percentage = (count / total_words) * 100
+    return percentage
+
+
 if __name__ == '__main__':
     liwc_dictionary_path = '../liwc/LIWC2007_English080730.dic'
     category_mapping_path = '../liwc/LIWC2007_Categories.txt'
     liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
+    category_map = load_category_mapping(category_mapping_path)
 
     emotion_codes = {
+        'swear': '22',
         'affect': '125',
         'posemo': '126',
         'negemo': '127',
@@ -86,14 +110,23 @@ if __name__ == '__main__':
         'anger': '129',
         'sad': '130'
     }
+
+    emotion_codes_2 = {
+        'swear' : '22',
+        'affect': '125'
+    }
+    
     
     sample_text = "I am very happy and excited."
     sample_text_2 = "I am feeling very happy today, but sometimes anxiety and sadness creep in unexpectedly. Overall, there is a mix of joy and a touch of worry."
     
-    liwc_results = analyze_text(sample_text, liwc_dict)
-    emotion_results = analyze_emotions(sample_text_2, liwc_dict, emotion_codes)
+    # liwc_results = analyze_text(sample_text, liwc_dict)
+    # emotion_results = analyze_emotions(sample_text_2, liwc_dict, emotion_codes)
+    
+    emotion_results = analyze_emotion(sample_text_2, liwc_dict, category_map, "affect")
+    print(emotion_results)
 
-    category_map = load_category_mapping(category_mapping_path)
+    # category_map = load_category_mapping(category_mapping_path)
     
     # print("LIWC Analysis Results:")
     # # for category, percentage in liwc_results.items():
@@ -105,6 +138,13 @@ if __name__ == '__main__':
     #     names = [category_map.get(code, code) for code in code_list]
     #     print(f"{' '.join(names)}: {percentage:.2f}%")
 
-    print("Emotion Analysis Results:")
-    for emotion, percentage in emotion_results.items():
-        print(f"{emotion}: {percentage:.2f}%")
+    # print("Emotion Analysis Results:")
+    # for emotion, percentage in emotion_results.items():
+    #     print(f"{emotion}: {percentage:.2f}%")
+
+    city_dict = {
+        "albuquerque": "Albuquerque"
+    }
+
+
+   

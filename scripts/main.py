@@ -2840,9 +2840,169 @@ def get_response_times_data_with_cutoff(
     return metrics_df
 
 
+def load_liwc_dictionary(dictionary_path):
+    liwc_dict = {}
+    with open(dictionary_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            line = line.strip()
+            if not line or '\t' not in line:
+                continue
+            try:
+                word, categories = line.split('\t', 1)
+                liwc_dict[word.lower()] = categories.split('\t')
+            except ValueError:
+                print(f"Skipping line: {line}")
+    return liwc_dict
+
+
+def load_category_mapping(mapping_file_path):
+    category_map = {}
+    with open(mapping_file_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            line = line.strip()
+            if not line or line.startswith('%'):
+                continue
+            try:
+                code, name = line.split('\t')
+                category_map[code] = name
+            except ValueError:
+                print(f"Skipping malformed line: {line}")
+    return category_map
+
+
+def tokenize(text):
+    return re.findall(r'\b\w+\b', text.lower())
+
+
+def analyze_emotion(text, liwc_dict, category_map, emotion_word):
+    tokens = tokenize(text)
+    total_words = len(tokens)
+    
+    if total_words == 0:
+        return 0
+
+    count = 0
+    for token in tokens:
+        if token in liwc_dict:
+            for code in liwc_dict[token]:
+                if category_map.get(code, "").lower() == emotion_word.lower():
+                    count += 1
+
+    percentage = (count / total_words) * 100
+    return percentage
+
+
+def get_liwc_percentage_metrics(
+    posts_file,
+    precovid_posts_file,
+    liwc_dict,
+    category_map,
+    emotion_word,
+    text_column='text',
+    resample_unit='W'
+):
+    """
+    Calculates and returns the LIWC percentage metrics for both pre-COVID and main datasets.
+
+    For each post, the LIWC percentage is computed as the percentage of words
+    that are associated with the target emotion (using the analyze_emotion function).
+    The results are aggregated by resampling (default weekly) and combined into a single
+    time series covering both periods.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file containing 'created_utc' and a text column.
+    precovid_posts_file : str
+        Path to the pre-COVID posts Parquet file containing 'created_utc' and a text column.
+    liwc_dict : dict
+        A dictionary where each key is a token and its value is a list of LIWC category codes.
+    category_map : dict
+        A mapping from LIWC category codes to their descriptive emotion names.
+    emotion_word : str
+        The target emotion to analyze (e.g., "anger", "joy").
+    text_column : str, optional
+        The name of the column in the posts files that contains the text to analyze.
+        Default is 'text'.
+    resample_unit : str, optional
+        Pandas resample frequency (default 'W' for weekly).
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with a single row labeled 'LIWC Percentage for <emotion_word>' and
+        columns corresponding to date strings (formatted as DD/MM/YYYY), containing the
+        average LIWC percentage per resampled period.
+    """
+    import pandas as pd
+
+    # Note: This function assumes that the `analyze_emotion` function is defined elsewhere.
+    # For example:
+    #
+    # def analyze_emotion(text, liwc_dict, category_map, emotion_word):
+    #     tokens = tokenize(text)
+    #     total_words = len(tokens)
+    #     if total_words == 0:
+    #         return 0
+    #     count = 0
+    #     for token in tokens:
+    #         if token in liwc_dict:
+    #             for code in liwc_dict[token]:
+    #                 if category_map.get(code, "").lower() == emotion_word.lower():
+    #                     count += 1
+    #     return (count / total_words) * 100
+
+    def process_data(posts_path):
+        # Read only the necessary columns: the timestamp and the text column.
+        posts = pd.read_parquet(posts_path, columns=['created_utc', text_column])
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+        posts.sort_values('created_datetime', inplace=True)
+
+        # Compute the LIWC percentage for each post.
+        posts['liwc_percentage'] = posts[text_column].apply(
+            lambda text: analyze_emotion(text, liwc_dict, category_map, emotion_word)
+        )
+
+        # Set the datetime column as the index for resampling.
+        posts.set_index('created_datetime', inplace=True)
+
+        # Compute the average LIWC percentage for posts in each resampling period.
+        liwc_metric = posts['liwc_percentage'].resample(resample_unit).mean()
+        return liwc_metric
+
+    # Process the pre-COVID dataset and limit its date range if desired.
+    precovid_liwc = process_data(precovid_posts_file)
+    precovid_liwc = precovid_liwc['2016-01-01':'2019-12-31']
+
+    # Process the main dataset.
+    main_liwc = process_data(posts_file)
+
+    # Combine the two periods into one time series.
+    combined_liwc = pd.concat([precovid_liwc, main_liwc])
+
+    # Construct a full date range to ensure continuity.
+    full_index = pd.date_range(
+        start=combined_liwc.index.min(),
+        end=combined_liwc.index.max(),
+        freq=resample_unit
+    )
+    combined_liwc = combined_liwc.reindex(full_index)
+
+    # Interpolate any missing values.
+    combined_liwc = combined_liwc.interpolate()
+
+    # Format the result into a DataFrame with the desired row and column labels.
+    metrics_table = pd.DataFrame(
+        {f'LIWC Percentage for {emotion_word}': combined_liwc.values},
+        index=combined_liwc.index.strftime('%d/%m/%Y')
+    ).transpose()
+
+    return metrics_table
+
+
 def save_timeseries_metrics_for_cities(city_dict):
     
-    output_dir = "../metrics"
+    output_dir = "../metrics_test"
     os.makedirs(output_dir, exist_ok=True)
 
     for city_key, city_name in city_dict.items():
@@ -2910,8 +3070,162 @@ def save_timeseries_metrics_for_cities(city_dict):
             time_diff_unit='minutes'
         )
 
-        combined_metrics = pd.concat([post_count_metrics, comment_count_metrics, comment_percentage_metrics, lifespan_metrics, response_metrics, cutoff_response_metrics], axis=0)
+        liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
+        category_map = load_category_mapping(category_mapping_path)
+
+
+        affect_metrics = get_liwc_percentage_metrics(
+            submissions_path,
+            prophet_train_submissions_path,
+            liwc_dict,
+            category_map,
+            "affect",
+            text_column='selftext',
+            resample_unit='W'
+        )
+        
+        affect_metrics = get_liwc_percentage_metrics(
+            submissions_path,
+            prophet_train_submissions_path,
+            liwc_dict,
+            category_map,
+            "affect",
+            text_column='selftext',
+            resample_unit='W'
+        )
+
+        combined_metrics = pd.concat([
+            post_count_metrics, 
+            comment_count_metrics, 
+            comment_percentage_metrics, 
+            lifespan_metrics, 
+            response_metrics, 
+            cutoff_response_metrics, 
+            affect_metrics
+        ], axis=0)
+
         output_path = os.path.join(output_dir, f"{city_lower}_metrics.parquet")
+        combined_metrics.to_parquet(output_path)
+
+
+# def save_liwc_timeseries_metrics_for_cities(city_dict):
+    
+#     output_dir = "../liwc_metrics"
+#     os.makedirs(output_dir, exist_ok=True)
+
+#     for city_key, city_name in city_dict.items():
+#         city_lower = city_key.lower().replace(" ", "")
+#         submissions_path = f"../covid_data_parquet/{city_lower}_submissions.parquet"
+#         comments_path = f"../covid_data_parquet/{city_lower}_comments.parquet"
+#         prophet_train_submissions_path = f"../prophet_train_parquet/{city_lower}_submissions.parquet"
+#         prophet_train_comments_path = f"../prophet_train_parquet/{city_lower}_comments.parquet"
+
+#         liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
+#         category_map = load_category_mapping(category_mapping_path)
+
+#         affect = get_liwc_percentage_metrics(
+#             submissions_path,
+#             prophet_train_submissions_path,
+#             liwc_dict,
+#             category_map,
+#             "affect",
+#             text_column='selftext',
+#             resample_unit='W'
+#         )
+        
+#         posemo = get_liwc_percentage_metrics(
+#             submissions_path,
+#             prophet_train_submissions_path,
+#             liwc_dict,
+#             category_map,
+#             "posemo",
+#             text_column='selftext',
+#             resample_unit='W'
+#         )
+
+#         negemo = get_liwc_percentage_metrics(
+#             submissions_path,
+#             prophet_train_submissions_path,
+#             liwc_dict,
+#             category_map,
+#             "negemo",
+#             text_column='selftext',
+#             resample_unit='W'
+#         )
+
+#         anx = get_liwc_percentage_metrics(
+#             submissions_path,
+#             prophet_train_submissions_path,
+#             liwc_dict,
+#             category_map,
+#             "anx",
+#             text_column='selftext',
+#             resample_unit='W'
+#         )
+
+#         anger = get_liwc_percentage_metrics(
+#             submissions_path,
+#             prophet_train_submissions_path,
+#             liwc_dict,
+#             category_map,
+#             "anx",
+#             text_column='selftext',
+#             resample_unit='W'
+#         )
+
+#         sad = get_liwc_percentage_metrics(
+#             submissions_path,
+#             prophet_train_submissions_path,
+#             liwc_dict,
+#             category_map,
+#             "anx",
+#             text_column='selftext',
+#             resample_unit='W'
+#         )
+
+#         combined_metrics = pd.concat([
+#             affect,
+#             posemo,
+#             negemo,
+#             anx,
+#             anger,
+#             sad
+#         ], axis=0)
+
+#         output_path = os.path.join(output_dir, f"{city_lower}_liwc_metrics.parquet")
+#         combined_metrics.to_parquet(output_path)
+
+
+def save_liwc_timeseries_metrics_for_cities(city_dict, categories):
+    output_dir = "../liwc_metrics"
+    os.makedirs(output_dir, exist_ok=True)
+
+    for city_key, city_name in city_dict.items():
+        city_lower = city_key.lower().replace(" ", "")
+        submissions_path = f"../covid_data_parquet/{city_lower}_submissions.parquet"
+        comments_path = f"../covid_data_parquet/{city_lower}_comments.parquet"
+        prophet_train_submissions_path = f"../prophet_train_parquet/{city_lower}_submissions.parquet"
+        prophet_train_comments_path = f"../prophet_train_parquet/{city_lower}_comments.parquet"
+
+        liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
+        category_map = load_category_mapping(category_mapping_path)
+
+        metrics_list = []
+        for category in categories:
+            metric = get_liwc_percentage_metrics(
+                submissions_path,
+                prophet_train_submissions_path,
+                liwc_dict,
+                category_map,
+                category,
+                text_column='selftext',
+                resample_unit='W'
+            )
+            metrics_list.append(metric)
+
+        combined_metrics = pd.concat(metrics_list, axis=0)
+
+        output_path = os.path.join(output_dir, f"{city_lower}_liwc_metrics.parquet")
         combined_metrics.to_parquet(output_path)
 
 
@@ -3862,6 +4176,46 @@ if __name__ == "__main__":
     nyc_precovid_submissions_path = f"../precovid_data_parquet/newyorkcity_submissions.parquet"
     nyc_precovid_comments_path = f"../precovid_data_parquet/newyorkcity_comments.parquet"
 
+    liwc_dictionary_path = '../liwc/LIWC2007_English080730.dic'
+    category_mapping_path = '../liwc/LIWC2007_Categories.txt'
+
+    categories = [
+        "affect",
+        "posemo",
+        "negemo",
+        "anx",
+        "anger",
+        "sad",
+        "swear",
+        "social",
+        "family",
+        "humans",
+        "incl",
+        "excl",
+        "cogmech",
+        "insight",
+        "cause",
+        "discrep",
+        "tentat",
+        "certain"
+        # "percept",
+        # "see",
+        # "hear",
+        # "feel",
+        # "bio",
+        # "body",
+        # "health",
+        # "ingest",
+        # "relativ",
+        # "motion",
+        # "space",
+        # "time",
+        # "work",
+        # "achieve",
+        # "money"
+    ]
+
+
     # df = pd.read_parquet("../response_cutoff_clusters.parquet")
     # cluster = [df["City"][i] for i,j in enumerate(df["Cluster"]) if j == 1]
     # print(cluster, len(cluster))
@@ -3902,7 +4256,7 @@ if __name__ == "__main__":
     
     # remove_automoderator_data(cities, source_folder="../prophet_train_parquet", target_folder="../prophet_train_parquet")
 
-    # save_timeseries_metrics_for_cities(city_dict)
+    save_liwc_timeseries_metrics_for_cities(city_dict, categories)
 
     # plot_two_clusters_timeseries("../aggregated_cluster_metrics.parquet", "../lifespan_clusters.png")
 
