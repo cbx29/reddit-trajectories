@@ -1030,7 +1030,7 @@ def plot_post_lifespan(
         return lifespan_df[['post_id', 'lifespan']]
 
 
-def plot_post_count(
+def calculate_and_plot_post_count(
     posts_file,
     comments_file,
     precovid_posts_file,
@@ -1125,7 +1125,7 @@ def plot_post_count(
     print("Done.")
 
 
-def plot_comment_count(
+def calculate_and_plot_comment_count(
     posts_file,
     comments_file,
     precovid_posts_file,
@@ -1222,7 +1222,7 @@ def plot_comment_count(
     print("Done.")
 
 
-def plot_post_lifespan_timeseries(
+def calculate_and_plot_post_lifespan_timeseries(
     posts_parquet_path,
     comments_parquet_path,
     aggregation='monthly',
@@ -1557,7 +1557,7 @@ def plot_response_times(posts_file, comments_file, city='', time_unit='W', time_
         plt.close()
 
 
-def plot_response_times_with_cutoff(
+def calculate_and_plot_response_times_with_cutoff(
     posts_file,
     comments_file,
     city='',
@@ -1663,7 +1663,7 @@ def plot_response_times_with_cutoff(
         plt.close()
 
 
-def plot_comment_percentage_time_window(
+def calculate_and_plot_comment_percentage_time_window(
     posts_file,
     comments_file,
     precovid_posts_file,
@@ -1674,8 +1674,6 @@ def plot_comment_percentage_time_window(
     plot_path='comment_percentage_7day.png',
     display_plot=True
 ):
-    import pandas as pd
-    import matplotlib.pyplot as plt
 
     def process_data(posts_file, comments_file):
         print(f"Loading posts data from {posts_file}...")
@@ -1755,7 +1753,7 @@ def plot_comment_percentage_time_window(
     print("Done.")
 
 
-def plot_post_sentiment(posts_file, city='', text_column='selftext', time_unit='W', save_plot=False, plot_path='post_sentiment.png', display_plot=True):
+def calculate_and_plot_post_sentiment(posts_file, city='', text_column='selftext', time_unit='W', save_plot=False, plot_path='post_sentiment.png', display_plot=True):
     """
     Analyzes and plots the average sentiment of Reddit posts over time using VADER.
 
@@ -1824,7 +1822,7 @@ def plot_post_sentiment(posts_file, city='', text_column='selftext', time_unit='
         plt.close()
 
 
-def plot_negative_sentiment_count(
+def calculate_and_plot_negative_sentiment_count(
         posts_file,
         city='',
         text_column='selftext',
@@ -1909,7 +1907,7 @@ def plot_negative_sentiment_count(
         plt.close()
 
 
-def plot_positive_sentiment_count(
+def calculate_and_plot_positive_sentiment_count(
         posts_file,
         city='',
         text_column='selftext',
@@ -1993,6 +1991,782 @@ def plot_positive_sentiment_count(
         plt.close()
 
 
+# ---- PLOT WITHOUT RECALCULATING ----#
+
+
+def load_city_data(file_path, metric, resample_unit, from_date, to_date):
+    """
+    Loads a city's metrics parquet file, extracts datetime values from column headings, 
+    and converts it to a resampled and interpolated time series for the chosen metric only.
+    """
+    df = pd.read_parquet(file_path)
+    
+    try:
+        df.columns = pd.to_datetime(df.columns, format="%d/%m/%Y")
+    except Exception as e:
+        raise ValueError(f"Error converting column headers to datetime in {file_path}: {e}")
+    
+    # Transpose so that dates become the index
+    df = df.T
+    df.index.name = "datetime"
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    print("Data date range:", df.index.min(), "to", df.index.max())
+    
+    # (By default we restrict to 2020-01-01 to 2021-12-31.
+    #  If a different slicing is needed for precovid data, you can do so after calling load_city_data.)
+    df = df.loc[from_date:to_date]
+
+    if metric not in df.columns:
+        raise ValueError(
+            f"Metric '{metric}' not found in file columns. Available metrics: {list(df.columns)}"
+        )
+    
+    df = df[[metric]]
+    df = df.resample(resample_unit).mean().interpolate()
+    return df.squeeze()  # Return a Series
+
+
+def plot_post_count(
+    metric_file,
+    city='',
+    resample_unit='W',
+    metric='Raw Number of Posts',
+    save_plot=False,
+    plot_path='post_count_timeseries.png',
+    display_plot=True
+):
+    """
+    Plots the time series for the number of posts over time by combining pre-COVID
+    and main (COVID) datasets. This version loads the data using a precomputed metrics
+    parquet file via the load_city_data function.
+    
+    Parameters
+    ----------
+    metric_file : str
+        Path to the main metrics parquet file containing the post count metric.
+    precovid_metric_file : str
+        Path to the precovid metrics parquet file containing the post count metric.
+    city : str, optional
+        Name of the city for plot titling.
+    resample_unit : str, optional
+        Pandas resample frequency (default is 'W' for weekly).
+    metric : str, optional
+        The name of the metric column to use (default is 'post_count').
+    save_plot : bool, optional
+        Whether to save the plot to disk.
+    plot_path : str, optional
+        File path where the plot should be saved if save_plot is True.
+    display_plot : bool, optional
+        Whether to display the plot interactively.
+    
+    Returns
+    -------
+    None
+    """
+    print("Loading precovid posts count data...")
+    # Load the precovid data and slice to the desired date range (if different from main data)
+    precovid_counts = load_city_data(metric_file, metric, resample_unit, "2019-10-01", "2019-12-31")
+
+    print("Loading main posts count data...")
+    main_counts = load_city_data(metric_file, metric, resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Combining datasets...")
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    print("Plotting the results...")
+    plt.figure(figsize=(12, 6))
+    combined_counts.plot(marker='o', linestyle='-', label='Number of Posts', color='blue')
+
+    # Mark the COVID start date
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel('Number of Posts')
+    plt.title(f'{city} Number of Posts Over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+    print("Done.")
+
+
+def plot_comment_count(
+    metric_file,
+    city='',
+    resample_unit='W',
+    metric='comment_count',
+    save_plot=False,
+    plot_path='comment_count_timeseries.png',
+    display_plot=True
+):
+    """
+    Plots the time series for the number of comments over time by combining pre-COVID
+    and main (COVID) datasets. This version loads the data using a precomputed metrics
+    parquet file via the load_city_data function.
+    
+    Parameters
+    ----------
+    metric_file : str
+        Path to the main metrics parquet file containing the comment count metric.
+    precovid_metric_file : str
+        Path to the pre-COVID metrics parquet file containing the comment count metric.
+    city : str, optional
+        Name of the city (if applicable) to be displayed in the plot title.
+    resample_unit : str, optional
+        Pandas resample frequency (default is 'W' for weekly).
+    metric : str, optional
+        The name of the metric column to use (default is 'comment_count').
+    save_plot : bool, optional
+        Whether to save the plot to disk.
+    plot_path : str, optional
+        File path where the plot should be saved if save_plot is True.
+    display_plot : bool, optional
+        Whether to display the plot interactively.
+    
+    Returns
+    -------
+    None
+    """
+    print("Loading pre-COVID comment count data...")
+    precovid_counts = load_city_data(metric_file, metric, resample_unit, "2019-10-01", "2019-12-31")
+
+    print("Loading main comment count data...")
+    main_counts = load_city_data(metric_file, metric, resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Combining datasets...")
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    print("Plotting the results...")
+    plt.figure(figsize=(12, 6))
+    combined_counts.plot(marker='o', linestyle='-', label='Number of Comments', color='blue')
+
+    # Mark the COVID start date
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel('Number of Comments')
+    plt.title(f'{city} Number of Comments Over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+    print("Done.")
+
+
+def plot_comment_percentage_time_window(
+    metric_file,
+    city='',
+    resample_unit='W',
+    metric='comment_percentage_7day',
+    save_plot=False,
+    plot_path='comment_percentage_7day.png',
+    display_plot=True
+):
+    """
+    Plots the precomputed percentage of posts that received a comment within 7 days.
+    It loads the main and precovid metrics from parquet files using load_city_data,
+    concatenates them, and plots the combined time series with a fixed y-axis (0–100).
+    """
+    print("Loading precovid metrics data...")
+    precovid_percentage = load_city_data(metric_file, metric, resample_unit, "2019-10-01", "2019-12-31")
+
+    print("Loading main metrics data...")
+    main_percentage = load_city_data(metric_file, metric, resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Combining datasets...")
+    combined_percentage = pd.concat([precovid_percentage, main_percentage])
+
+    print("Plotting the results...")
+    plt.figure(figsize=(12, 6))
+    combined_percentage.plot(marker='o', linestyle='-', 
+                               label='Percentage of Posts with Comments', color='blue')
+
+    # Mark the COVID start date
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', 
+                label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel('Percentage of Posts with Comments Within 7 Days (%)')
+    plt.title(f'{city} Percentage of Posts Receiving Comments Within 7 Days')
+    plt.legend()
+    plt.grid(True)
+    plt.ylim(0, 100)  # Fixed y-axis from 0 to 100
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+    print("Done.")
+
+
+def plot_response_times_with_cutoff(
+    metric_file,
+    city='',
+    resample_unit='W',
+    metric='',
+    time_diff_unit='minutes',
+    save_plot=False,
+    plot_path='average_response_times.png',
+    display_plot=True
+):
+    """
+    Plots the average response times of city subreddit posts, considering only responses
+    that occur within 24 hours of a post, by combining pre-COVID and main (COVID) datasets.
+    Data is loaded from precomputed metrics parquet files via load_city_data.
+    
+    The parquet files are assumed to have date strings (formatted as "%d/%m/%Y") as column headers
+    and contain a column named 'average_response_time' (with values in seconds).
+    
+    Parameters:
+    - metric_file (str): Path to the main metrics parquet file containing the average response time metric.
+    - precovid_metric_file (str): Path to the pre-COVID metrics parquet file containing the average response time metric.
+    - city (str): City name for the plot title.
+    - time_unit (str): Resampling frequency (e.g., 'W' for weekly, 'M' for monthly).
+    - time_diff_unit (str): Unit for response time ('seconds', 'minutes', 'hours', or 'days').
+    - save_plot (bool): Whether to save the plot to a file.
+    - plot_path (str): File path to save the plot if save_plot is True.
+    - display_plot (bool): Whether to display the plot interactively.
+    
+    Returns:
+    - None
+    """
+    print("Loading pre-COVID average response time data...")
+    precovid_response = load_city_data(metric_file, metric, resample_unit, "2019-10-01", "2019-12-31")
+
+    print("Loading main average response time data...")
+    main_response = load_city_data(metric_file, metric, resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Combining datasets...")
+    combined_response = pd.concat([precovid_response, main_response])
+    
+    # Convert the response times (assumed to be in seconds) to the requested unit.
+    if time_diff_unit == 'seconds':
+        response_converted = combined_response
+        ylabel = 'Average Response Time (Seconds)'
+    elif time_diff_unit == 'minutes':
+        response_converted = combined_response / 60
+        ylabel = 'Average Response Time (Minutes)'
+    elif time_diff_unit == 'hours':
+        response_converted = combined_response / 3600
+        ylabel = 'Average Response Time (Hours)'
+    elif time_diff_unit == 'days':
+        response_converted = combined_response / 86400
+        ylabel = 'Average Response Time (Days)'
+    else:
+        raise ValueError("Unsupported time_diff_unit. Choose from 'seconds', 'minutes', 'hours', or 'days'.")
+
+    # Plot the combined time series.
+    print("Plotting the average response times with cutoff...")
+    plt.figure(figsize=(12, 6))
+    response_converted.plot(marker='o', linestyle='-', label='Average Response Time', color='blue')
+    
+    # Mark the COVID start date.
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', label='COVID Start Date (Jan 2020)')
+    
+    plt.xlabel('Time')
+    plt.ylabel(ylabel)
+    plt.title(f'{city} Average Response Times (Responses within 24 Hours) Over Time')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+    
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+    
+    print("Done.")
+
+
+def plot_post_lifespan_timeseries(
+    metric_file,
+    resample_unit='weekly',
+    metric='',
+    units='hours',
+    statistic='mean',
+    title='Post Lifespan Over Time',
+    xlabel=None,
+    ylabel=None,
+    figsize=(14, 7),
+    return_data=False,
+    log_scale=False,
+    verbose=False,
+    save_plot=False,
+    plot_path='post_lifespan_timeseries.png',
+    display_plot=True
+):
+    """
+    Plots the post lifespan time series (aggregated by a specified interval) using precomputed metrics
+    loaded from parquet files via load_city_data. Both pre‑COVID and main (COVID) data are loaded and combined.
+    A red dotted vertical line is added at January 1, 2020.
+
+    Parameters:
+    -----------
+    metric_file : str
+        Path to the main metrics parquet file containing the post lifespan metric.
+    precovid_metric_file : str
+        Path to the pre‑COVID metrics parquet file containing the post lifespan metric.
+    resample_unit : str, optional
+        Aggregation interval; one of 'daily', 'weekly', 'monthly', 'yearly' (or a valid pandas resampling string).
+        Default is 'monthly'.
+    units : str, optional
+        Time units for lifespan; one of 'seconds', 'minutes', 'hours', 'days'. Default is 'hours'.
+        (Note: the precomputed metric is assumed to be in seconds for 'mean' or 'median'.)
+    statistic : str, optional
+        Statistic to plot; one of 'mean', 'median', 'count'. Default is 'mean'.
+    title : str, optional
+        Title of the plot.
+    xlabel : str, optional
+        Label for the x-axis. If None, it is set based on resample_unit.
+    ylabel : str, optional
+        Label for the y-axis. If None, it is set based on statistic and units.
+    figsize : tuple, optional
+        Figure size.
+    return_data : bool, optional
+        If True, returns the combined aggregated data as a DataFrame.
+    log_scale : bool, optional
+        If True, uses logarithmic scaling on the y-axis.
+    verbose : bool, optional
+        If True, prints detailed logs.
+    save_plot : bool, optional
+        If True, saves the plot to file.
+    plot_path : str, optional
+        File path to save the plot.
+    display_plot : bool, optional
+        If True, displays the plot interactively.
+
+    Returns:
+    --------
+    pd.DataFrame or None
+        The aggregated data (if return_data is True); otherwise, None.
+    """
+
+    # Map textual resample_unit values to pandas resample rules.
+    resample_mapping = {
+        'daily': 'D',
+        'weekly': 'W',
+        'monthly': 'M',
+        'yearly': 'Y'
+    }
+    ru_lower = resample_unit.lower()
+    if ru_lower in resample_mapping:
+        resample_rule = resample_mapping[ru_lower]
+    else:
+        # Otherwise, assume the provided string is a valid pandas resample rule.
+        resample_rule = resample_unit
+
+    # Set default axis labels if not provided.
+    if xlabel is None:
+        xlabel = f"Time ({resample_unit.capitalize()})"
+    if ylabel is None:
+        if statistic in ['mean', 'median']:
+            ylabel = f"Post Lifespan ({units.capitalize()})"
+        elif statistic == 'count':
+            ylabel = "Number of Posts"
+
+    if verbose:
+        print("Loading pre‑COVID post lifespan data...")
+    # Load pre‑COVID data using load_city_data and slice it to the desired period.
+    precovid_series = load_city_data(metric_file, metric, resample_rule, "2019-10-01", "2019-12-31")
+
+    if verbose:
+        print("Loading main post lifespan data...")
+    main_series = load_city_data(metric_file, metric, resample_rule, "2020-01-01", "2021-12-31")
+
+    if verbose:
+        print("Combining pre‑COVID and main data...")
+    combined_series = pd.concat([precovid_series, main_series])
+    
+    # For time-based statistics (mean or median), perform unit conversion.
+    if statistic in ['mean', 'median']:
+        if units == 'seconds':
+            conversion_factor = 1
+        elif units == 'minutes':
+            conversion_factor = 1/60
+        elif units == 'hours':
+            conversion_factor = 1/3600
+        elif units == 'days':
+            conversion_factor = 1/86400
+        else:
+            raise ValueError("Unsupported units. Choose from 'seconds', 'minutes', 'hours', or 'days'.")
+        combined_series = combined_series * conversion_factor
+
+    if verbose:
+        print("Plotting aggregated post lifespan time series...")
+    plt.figure(figsize=figsize)
+    sns.set(style="whitegrid")
+
+    # Plot based on the chosen statistic.
+    if statistic in ['mean', 'median']:
+        plt.plot(combined_series.index, combined_series.values, marker='o', linestyle='-', color='blue',
+                 label=f'Post Lifespan ({statistic.capitalize()})')
+    elif statistic == 'count':
+        plt.bar(combined_series.index, combined_series.values, color='blue', label='Number of Posts')
+
+    # Add a red dotted vertical line at the COVID start date.
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', label='COVID Start Date (Jan 2020)')
+
+    plt.title(title, fontsize=16)
+    plt.xlabel(xlabel, fontsize=14)
+    plt.ylabel(ylabel, fontsize=14)
+    if log_scale:
+        plt.yscale('log')
+    if resample_rule in ['M', 'Y']:
+        plt.xticks(rotation=45)
+    plt.legend()
+    plt.tight_layout()
+
+    if save_plot:
+        plot_dir = os.path.dirname(plot_path)
+        if plot_dir and not os.path.exists(plot_dir):
+            os.makedirs(plot_dir, exist_ok=True)
+        plt.savefig(plot_path)
+        if verbose:
+            print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+    if verbose:
+        print("Plotting complete.")
+
+    if return_data:
+        aggregated_df = combined_series.reset_index()
+        aggregated_df.columns = ['Time', f'Post_Lifespan_{statistic}_{units}']
+        return aggregated_df
+
+
+def plot_post_sentiment(
+    metric_file,
+    city='',
+    resample_unit='W',
+    metric='average_sentiment',
+    save_plot=False,
+    plot_path='post_sentiment.png',
+    display_plot=True
+):
+    """
+    Plots the average sentiment of Reddit posts over time using precomputed metrics loaded via load_city_data().
+    Combines pre‑COVID and main (COVID) datasets, and marks the COVID start date with a red dotted vertical line.
+    
+    Parameters:
+    - metric_file (str): Path to the main metrics parquet file containing the sentiment metric.
+    - precovid_metric_file (str): Path to the pre‑COVID metrics parquet file containing the sentiment metric.
+    - city (str, optional): City name for the plot title.
+    - resample_unit (str, optional): Pandas resample frequency (e.g., 'W' for weekly, 'M' for monthly).
+    - metric (str, optional): Name of the sentiment metric column to load (default is 'average_sentiment').
+    - save_plot (bool, optional): Whether to save the plot to a file.
+    - plot_path (str, optional): File path where the plot should be saved.
+    - display_plot (bool, optional): Whether to display the plot interactively.
+    
+    Returns:
+    - None
+    """
+    print("Loading pre‑COVID post sentiment data...")
+    precovid_sentiment = load_city_data(metric_file, metric, resample_unit, "2019-10-01", "2019-12-31")
+
+    print("Loading main post sentiment data...")
+    main_sentiment = load_city_data(metric_file, metric, resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Combining pre‑COVID and main sentiment data...")
+    combined_sentiment = pd.concat([precovid_sentiment, main_sentiment])
+
+    print("Plotting the average sentiment over time...")
+    plt.figure(figsize=(12, 6))
+    combined_sentiment.plot(marker='o', linestyle='-', color='blue', label='Average Sentiment Score')
+
+    # Mark the COVID start date with a red dotted vertical line.
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel('Average Sentiment Score')
+    plt.title(f'{city} Average Sentiment of Posts Over Time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+
+def plot_positive_sentiment_count(
+    metric_file,
+    city='',
+    resample_unit='W',
+    metric='positive_sentiment_count',
+    threshold=0.05,
+    save_plot=False,
+    plot_path='positive_sentiment_count.png',
+    display_plot=True
+):
+    """
+    Plots the number of Reddit posts with positive sentiment (i.e., sentiment > threshold)
+    over time using precomputed metrics loaded via load_city_data(). Both pre‑COVID and main (COVID)
+    data are combined, and a red dotted vertical line marks the COVID start date (January 1, 2020).
+
+    Parameters:
+    - metric_file (str): Path to the main metrics parquet file containing the positive sentiment count metric.
+    - precovid_metric_file (str): Path to the pre‑COVID metrics parquet file containing the positive sentiment count metric.
+    - city (str, optional): City name or label for the plot title.
+    - resample_unit (str, optional): Pandas resample frequency (e.g., 'W' for weekly, 'M' for monthly).
+    - metric (str, optional): Name of the metric column to load (default is 'positive_sentiment_count').
+    - threshold (float, optional): The sentiment threshold used (for reference in axis labels). Default is 0.05.
+    - save_plot (bool, optional): Whether to save the plot to a file.
+    - plot_path (str, optional): File path to save the plot.
+    - display_plot (bool, optional): Whether to display the plot interactively.
+
+    Returns:
+    - None
+    """
+    print("Loading pre‑COVID positive sentiment count data...")
+    # Load pre‑COVID data via load_city_data() and slice it to a fixed period (e.g., October 1, 2019 to December 31, 2019).
+    precovid_counts = load_city_data(metric_file, metric, resample_unit, "2019-10-01", "2019-12-31")
+
+    print("Loading main positive sentiment count data...")
+    main_counts = load_city_data(metric_file, metric, resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Combining pre‑COVID and main data...")
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    print(f"Plotting the number of posts with sentiment > {threshold} over time...")
+    plt.figure(figsize=(12, 6))
+    combined_counts.plot(marker='o', linestyle='-', color='blue', 
+                         label=f'Posts with Sentiment > {threshold}')
+
+    # Add a red dotted vertical line at the COVID start date.
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', 
+                label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel(f'Number of Posts (Sentiment > {threshold})')
+    plt.title(f'{city} Positive Sentiment Post Count Over Time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+
+def plot_negative_sentiment_count(
+    metric_file,
+    city='',
+    resample_unit='W',
+    metric='negative_sentiment_count',
+    threshold=-0.05,
+    save_plot=False,
+    plot_path='negative_sentiment_count.png',
+    display_plot=True
+):
+    """
+    Plots the number of Reddit posts with negative sentiment (i.e. sentiment below a given threshold)
+    over time using precomputed metrics loaded via load_city_data(). Pre‑COVID and main (COVID) data are
+    combined, and a red dotted vertical line marks the COVID start date (January 1, 2020).
+
+    Parameters:
+    - metric_file (str): Path to the main metrics parquet file containing the negative sentiment count metric.
+    - precovid_metric_file (str): Path to the pre‑COVID metrics parquet file containing the negative sentiment count metric.
+    - city (str, optional): City name or label for the plot title.
+    - resample_unit (str, optional): Pandas resample frequency (e.g., 'W' for weekly, 'M' for monthly).
+    - metric (str, optional): Name of the metric column to load (default is 'negative_sentiment_count').
+    - threshold (float, optional): Sentiment threshold used for labeling (not used in computation here). Default is -0.05.
+    - save_plot (bool, optional): Whether to save the plot to a file.
+    - plot_path (str, optional): File path to save the plot.
+    - display_plot (bool, optional): Whether to display the plot interactively.
+
+    Returns:
+    - None
+    """
+    print("Loading pre‑COVID negative sentiment count data...")
+    precovid_counts = load_city_data(metric_file, metric, resample_unit, "2019-10-01", "2019-12-31")
+    
+    print("Loading main negative sentiment count data...")
+    main_counts = load_city_data(metric_file, metric, resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Combining pre‑COVID and main data...")
+    combined_counts = pd.concat([precovid_counts, main_counts])
+
+    print(f"Plotting the number of posts with sentiment < {threshold} over time...")
+    plt.figure(figsize=(12, 6))
+    combined_counts.plot(marker='o', linestyle='-', color='blue', 
+                         label=f'Posts with Sentiment < {threshold}')
+
+    # Mark the COVID start date with a red dotted vertical line.
+    covid_start_date = pd.Timestamp('2020-01-01')
+    plt.axvline(covid_start_date, color='red', linestyle='--', 
+                label='COVID Start Date (Jan 2020)')
+
+    plt.xlabel('Time')
+    plt.ylabel(f'Number of Posts (Sentiment < {threshold})')
+    plt.title(f'{city} Negative Sentiment Post Count Over Time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+
+def plot_liwc_waterfall(
+    metric_file,
+    component,
+    city='',
+    resample_unit='W',
+    baseline_start='2019-10-01',
+    baseline_end='2019-12-31',
+    main_start='2020-01-01',
+    main_end='2021-12-31',
+    save_plot=False,
+    plot_path='liwc_waterfall.png',
+    display_plot=True
+):
+    """
+    Aggregates weekly LIWC component points into quarterly sums, using the period
+    Oct–Dec 2019 as a baseline. Then computes the cumulative differences (quarter‑to‑quarter changes)
+    and plots a waterfall chart.
+
+    Parameters:
+    - metric_file (str): Path to the file containing LIWC component metrics.
+    - component (str): The LIWC component (e.g., 'LIWC Percentage for swear') to plot.
+    - city (str, optional): City name to include in the plot title.
+    - resample_unit (str, optional): The frequency unit of the raw data (default 'W' for weekly).
+    - baseline_start (str, optional): Start date for baseline aggregation (default '2019-10-01').
+    - baseline_end (str, optional): End date for baseline aggregation (default '2019-12-31').
+    - main_start (str, optional): Start date for main data aggregation (default '2020-01-01').
+    - main_end (str, optional): End date for main data aggregation (default '2020-12-31').
+    - save_plot (bool, optional): Whether to save the plot to file.
+    - plot_path (str, optional): File path where the plot should be saved.
+    - display_plot (bool, optional): Whether to display the plot interactively.
+    
+    Returns:
+    - None
+    """
+
+    # --- Load and aggregate baseline data ---
+    print("Loading baseline LIWC data ({} to {})...".format(baseline_start, baseline_end))
+    baseline_data = load_city_data(metric_file, component, resample_unit, baseline_start, baseline_end)
+    # Since load_city_data returns a Series, we sum the values directly.
+    baseline_value = baseline_data.mean()
+    print("Baseline (Oct-Dec 2019) {}: {:.2f}".format(component, baseline_value))
+    
+    # --- Load main data and aggregate quarterly ---
+    print("Loading main LIWC data ({} to {})...".format(main_start, main_end))
+    main_data = load_city_data(metric_file, component, resample_unit, main_start, main_end)
+    
+    # Resample the weekly data to quarterly sums.
+    quarterly_data = main_data.resample('Q').mean()
+    quarterly_data = quarterly_data.sort_index()
+    
+    # Extract quarterly values
+    quarter_values = quarterly_data.values.tolist()
+    
+    # Create a list of cumulative values: start with baseline, then each quarter total.
+    cumulative = [baseline_value] + quarter_values
+    
+    # Compute the quarter-to-quarter increments.
+    increments = [cumulative[i] - cumulative[i-1] for i in range(1, len(cumulative))]
+    
+    # Define labels: the first is "Baseline", then Q1, Q2, etc.
+    labels = ['Baseline'] + [f'Q{i}' for i in range(1, len(cumulative))]
+    
+    # --- Plotting the Waterfall Chart ---
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bar_width = 0.5
+    # Plot baseline
+    ax.bar(0, cumulative[0], width=bar_width, color='skyblue', edgecolor='black')
+    
+    # Plot each quarterly change
+    for i, inc in enumerate(increments, start=1):
+        prev_total = cumulative[i-1]
+        # For a positive increment, draw upward; for a negative, draw downward.
+        if inc >= 0:
+            bottom = prev_total
+            color = 'green'
+        else:
+            bottom = cumulative[i]  # Draw from the new (lower) cumulative value.
+            color = 'red'
+        ax.bar(i, abs(inc), width=bar_width, bottom=bottom, color=color, edgecolor='black')
+    
+    # Connect cumulative totals with a line
+    ax.plot(range(len(cumulative)), cumulative, marker='o', color='black', linestyle='--')
+    
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(f'{component} (aggregated points)')
+    title_str = (f'{city} "{component}" Waterfall Chart\n'
+                 f'(Precovid Baseline: Oct-Dec 2019; Quarterly changes for 2020-2022 period)')
+    ax.set_title(title_str)
+    ax.grid(True, axis='y', linestyle='--', alpha=0.7)
+    
+    plt.tight_layout()
+    
+    if save_plot:
+        plt.savefig(plot_path)
+        print("Plot saved to {}".format(plot_path))
+    
+    if display_plot:
+        plt.show()
+    else:
+        plt.close()
+
+
+# ---- END OF PLOTS WITHOUT RECALCULATING ----#
+
+
 def remove_automoderator_data(city_names, source_folder="../covid_data_parquet", target_folder="../covid_data_parquet_2"):
     """
     Processes .parquet files for a list of city names by removing entries where the author is "AutoModerator".
@@ -2025,6 +2799,33 @@ def remove_automoderator_data(city_names, source_folder="../covid_data_parquet",
                 print(f"File not found: {source_path}")
 
 
+def get_global_y_limits(city_dict, metric_column):
+    """
+    Determines the global min and max values for a given metric across all cities.
+
+    Parameters:
+    - city_dict (dict): Dictionary where each key is a city identifier.
+    - metric_column (str): The name of the metric column to extract min/max values.
+
+    Returns:
+    - (float, float): Global min and max values for the metric.
+    """
+    global_min = float('inf')
+    global_max = float('-inf')
+
+    for city_key in city_dict.keys():
+        city_lower = city_key.lower().replace(" ", "")
+        metric_parquet_path = f"../metrics/{city_lower}_metrics.parquet"
+        
+        if os.path.exists(metric_parquet_path):
+            df = pd.read_parquet(metric_parquet_path)
+            if metric_column in df.columns:
+                global_min = min(global_min, df[metric_column].min())
+                global_max = max(global_max, df[metric_column].max())
+
+    return global_min, global_max
+
+
 def generate_graphs_for_cities(city_dict):
     """
     Generates and saves graphs for each city contained in city_dict.
@@ -2036,6 +2837,8 @@ def generate_graphs_for_cities(city_dict):
     Returns:
     - None: Graphs are saved as PNG files in the "graphs" folder.
     """
+    print("Starting Graph Generation...")
+
     output_dir = "../graphs"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -2043,63 +2846,12 @@ def generate_graphs_for_cities(city_dict):
         city_lower = city_key.lower().replace(" ", "")
         submissions_path = f"../covid_data_parquet/{city_lower}_submissions.parquet"
         comments_path = f"../covid_data_parquet/{city_lower}_comments.parquet"
+        metric_parquet_path = f"../metrics/{city_lower}_metrics.parquet"
+        liwc_metric_parquet_path = f"../liwc_metrics/{city_lower}_liwc_metrics.parquet"
         precovid_submissions_path = f"../precovid_data_parquet/{city_lower}_submissions.parquet"
         precovid_comments_path = f"../precovid_data_parquet/{city_lower}_comments.parquet"
 
-        # # --- Plot post sentiment ---
-        # plot_post_sentiment(submissions_path, city_name, text_column='selftext', time_unit='W', save_plot=True, plot_path=f'../graphs/{city_key}_post_sentiment.png', display_plot=False)
-        # # sentiment_filename = os.path.join(output_dir, f"{city_key}_post_sentiment.png")
-        # # plt.savefig(sentiment_filename)
-        # plt.clf()
-
-        # plot_negative_sentiment_count(
-        #     submissions_path,
-        #     city=city_name,
-        #     text_column='selftext',
-        #     time_unit='W',       
-        #     threshold=-0.05,            
-        #     save_plot=True,
-        #     plot_path=f'../graphs/{city_key}_negative_sentiment_count.png',
-        #     display_plot=False
-        # )
-        # plt.clf()
-
-        # plot_positive_sentiment_count(
-        #     submissions_path,
-        #     city=city_name,
-        #     text_column='selftext',
-        #     time_unit='W',      
-        #     threshold=0.05,          
-        #     save_plot=True,
-        #     plot_path=f'../graphs/{city_key}_positive_sentiment_count.png',
-        #     display_plot=False
-        # )
-        # plt.clf()
-
-        # --- Plot comment percentage ---
-        # plot_comment_percentage_time_window(
-        #     submissions_path,
-        #     comments_path,
-        #     city=city_name,
-        #     resample_unit='W',
-        #     save_plot=True,
-        #     plot_path=f'../graphs/{city_key}_comment_percentage_same_week.png',
-        #     display_plot=False
-        # )
-
-        # plot_comment_percentage_time_window(
-        #     submissions_path,
-        #     comments_path,
-        #     precovid_submissions_path,
-        #     precovid_comments_path,
-        #     city=city_name,
-        #     resample_unit='W',
-        #     save_plot=True,
-        #     plot_path=f'../graphs/{city_key}_comment_percentage_same_week.png',
-        #     display_plot=False
-        # )
-
-        # plot_post_count(
+        # calculate_and_plot_post_count(
         #     submissions_path, 
         #     comments_path,
         #     precovid_submissions_path,
@@ -2107,13 +2859,11 @@ def generate_graphs_for_cities(city_dict):
         #     city=city_name, 
         #     resample_unit='W', 
         #     save_plot=True, 
-        #     plot_path=f'../graphs/{city_key}_post_count_timeseries.png', 
+        #     plot_path=f'../{output_dir}/{city_key}_post_count_timeseries.png', 
         #     display_plot=False
         # )
 
-        # plt.clf()
-
-        # plot_comment_count(
+        # calculate_and_plot_comment_count(
         #     submissions_path, 
         #     comments_path,
         #     precovid_submissions_path, 
@@ -2121,29 +2871,39 @@ def generate_graphs_for_cities(city_dict):
         #     city=city_name, 
         #     resample_unit='W', 
         #     save_plot=True, 
-        #     plot_path=f'../graphs/{city_key}_comment_count_timeseries.png', 
+        #     plot_path=f'../{output_dir}/{city_key}_comment_count_timeseries.png', 
         #     display_plot=False
         # )
 
-        plot_response_times_with_cutoff(
-            submissions_path,
-            comments_path,
-            city=city_name,
-            time_unit='W',
-            time_diff_unit='hours',
-            save_plot=True,
-            plot_path=f'../graphs/{city_key}_average_response_times_cutoff.png',
-            display_plot=False
-        )
+        # --- Plot comment percentage ---
+        # calculate_and_plot_comment_percentage_time_window(
+        #     submissions_path,
+        #     comments_path,
+        #     precovid_submissions_path,
+        #     precovid_comments_path,
+        #     city=city_name,
+        #     resample_unit='W',
+        #     save_plot=True,
+        #     plot_path=f'../{output_dir}/{city_key}_comment_percentage_same_week.png',
+        #     display_plot=False
+        # )
 
-        plt.clf()
+        # --- Plot response times ---
+        # calculate_and_plot_response_times_with_cutoff(
+        #     submissions_path,
+        #     comments_path,
+        #     city=city_name,
+        #     time_unit='W',
+        #     time_diff_unit='hours',
+        #     save_plot=True,
+        #     plot_path=f'../graphs/{city_key}_average_response_times_cutoff.png',
+        #     display_plot=False
+        # )
 
         # # --- Plot response times ---
-        # plot_response_times(submissions_path, comments_path, city_name, time_unit='W', time_diff_unit='hours', save_plot=True, plot_path=f'../graphs/{city_key}_average_response_times.png', display_plot=False)
-        # plt.clf()
 
         # # --- Plot post lifespan timeseries ---
-        # plot_post_lifespan_timeseries(
+        # calculate_and_plot_post_lifespan_timeseries(
         #     submissions_path,
         #     comments_path,
         #     aggregation='weekly',
@@ -2160,7 +2920,6 @@ def generate_graphs_for_cities(city_dict):
         #     plot_path=f'../graphs/{city_key}_post_lifespan_timeseries.png',
         #     display_plot=False
         # )
-        # plt.clf()
 
         # # --- Plot post lifespan distribution ---
         # plot_post_lifespan(
@@ -2196,7 +2955,150 @@ def generate_graphs_for_cities(city_dict):
         # )
         # plt.clf()
 
+        # # --- Plot post sentiment ---
+        # calculate_and_plot_post_sentiment(
+        #     metric_parquet_path,
+        #     city=city_name,
+        #     resample_unit='W',
+        #     metric='average_sentiment',
+        #     save_plot=False,
+        #     plot_path='post_sentiment.png',
+        #     display_plot=True
+        # )
+
+        # calculate_and_plot_positive_sentiment_count(
+        #     submissions_path,
+        #     city=city_name,
+        #     text_column='selftext',
+        #     time_unit='W',      
+        #     threshold=0.05,          
+        #     save_plot=True,
+        #     plot_path=f'../graphs/{city_key}_positive_sentiment_count.png',
+        #     display_plot=False
+        # )
+        # plt.clf()
+
+        # calculate_and_plot_negative_sentiment_count(
+        #     submissions_path,
+        #     city=city_name,
+        #     text_column='selftext',
+        #     time_unit='W',       
+        #     threshold=-0.05,            
+        #     save_plot=True,
+        #     plot_path=f'../graphs/{city_key}_negative_sentiment_count.png',
+        #     display_plot=False
+        # )
+        # plt.clf()
+
+        plot_post_count(
+            metric_parquet_path,
+            city=city_name, 
+            resample_unit='W', 
+            metric="Raw Number of Posts",
+            save_plot=True, 
+            plot_path=f'{output_dir}/{city_key}_post_count_timeseries.png', 
+            display_plot=False
+        )
+
+        plot_comment_count(
+            metric_parquet_path,
+            city=city_name, 
+            resample_unit='W', 
+            metric="Raw Number of Comments",
+            save_plot=True, 
+            plot_path=f'{output_dir}/{city_key}_comment_count_timeseries.png', 
+            display_plot=False
+        )
+
+        plot_comment_percentage_time_window(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric="Percentage of Posts with Comments",
+            save_plot=True,
+            plot_path=f'{output_dir}/{city_key}_comment_percentage_same_week.png',
+            display_plot=False
+        )
+
+        plot_response_times_with_cutoff(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric = 'Average Response Time with Cutoff (Minutes)',
+            time_diff_unit='minutes',
+            save_plot=True,
+            plot_path=f'{output_dir}/{city_key}_average_response_times.png',
+            display_plot=False
+        )
+
+        plot_post_lifespan_timeseries(
+            metric_parquet_path,
+            resample_unit='weekly',
+            metric='Post Lifespan (Mean in hours)',
+            units='hours',
+            statistic='mean',
+            title='Post Lifespan Over Time',
+            xlabel=None,
+            ylabel=None,
+            figsize=(14, 7),
+            return_data=False,
+            log_scale=False,
+            verbose=False,
+            save_plot=True,
+            plot_path=f'{output_dir}/{city_key}_post_lifespan_timeseries.png',
+            display_plot=False
+        )
+
+        plot_post_sentiment(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric='Average Sentiment',
+            save_plot=True,
+            plot_path=f'{output_dir}/{city_key}_post_sentiment.png',
+            display_plot=False
+        )
+
+        plot_positive_sentiment_count(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric='Positive Sentiment Count',
+            threshold=0.05,
+            save_plot=True,
+            plot_path=f'{output_dir}/{city_key}_positive_sentiment_count.png',
+            display_plot=False
+        )
+
+        plot_negative_sentiment_count(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric='Negative Sentiment Count',
+            threshold=-0.05,
+            save_plot=True,
+            plot_path=f'{output_dir}/{city_key}_negative_sentiment_count.png',
+            display_plot=False
+        )
+
+        # plot_liwc_waterfall(
+        #     liwc_metric_parquet_path,
+        #     component="LIWC Percentage for affect",
+        #     city=city_name,
+        #     resample_unit='W',
+        #     baseline_start='2019-10-01',
+        #     baseline_end='2019-12-31',
+        #     main_start='2020-01-01',
+        #     main_end='2021-12-31',
+        #     save_plot=True,
+        #     plot_path=f'{output_dir}/{city_key}_liwc_waterfall.png',
+        #     display_plot=False
+        # )
+
         print(f"Graphs for {city_name} saved in the '{output_dir}' folder.")
+
+
+# ---- GET TIME SERIES METRICS IN PARQUETS ----#
 
 
 def get_raw_post_count_metrics(
@@ -2840,6 +3742,299 @@ def get_response_times_data_with_cutoff(
     return metrics_df
 
 
+def get_post_sentiment_metrics(
+    posts_file,
+    comments_file,  
+    precovid_posts_file,
+    precovid_comments_file, 
+    city='',
+    resample_unit='W',
+    text_column='selftext'
+):
+    """
+    Calculates and returns the average sentiment score metrics for posts, computed using VADER,
+    for both pre-COVID and main datasets over time. Any periods with missing sentiment values are filled with 0.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file containing at least 'id', 'created_utc', and the text column.
+    comments_file : str
+        (Not used in this version, kept for consistency.)
+    precovid_posts_file : str
+        Path to the pre-COVID posts Parquet file.
+    precovid_comments_file : str
+        (Not used in this version, kept for consistency.)
+    city : str, optional
+        City name (not used in the computation; reserved for labeling if needed).
+    resample_unit : str, optional
+        Pandas resample frequency (default 'W' for weekly).
+    text_column : str, optional
+        The column in the posts file that contains the post text (default 'selftext').
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with a single row labeled 'Average Sentiment' and columns corresponding to
+        resampled time periods (formatted as DD/MM/YYYY), containing the average sentiment score.
+    """
+    import pandas as pd
+    import nltk
+    from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+    # Ensure the VADER lexicon is available.
+    try:
+        nltk.data.find('sentiment/vader_lexicon.zip')
+    except LookupError:
+        print("VADER lexicon not found. Downloading...")
+        nltk.download('vader_lexicon')
+    sid = SentimentIntensityAnalyzer()
+
+    def process_posts(posts_path):
+        # Read only the necessary columns from the Parquet file.
+        posts = pd.read_parquet(posts_path, columns=['id', 'created_utc', text_column])
+        
+        # Clean and filter out posts with missing or empty text.
+        posts[text_column] = posts[text_column].fillna('').astype(str)
+        posts = posts[posts[text_column].str.strip() != '']
+        
+        # Convert Unix timestamp to datetime and set as index.
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+        posts.set_index('created_datetime', inplace=True)
+        
+        # Compute sentiment for each post using VADER.
+        posts['sentiment'] = posts[text_column].apply(lambda x: sid.polarity_scores(x)['compound'])
+        
+        # Resample the sentiment scores, compute the average, and fill any missing periods with 0.
+        avg_sentiment = posts['sentiment'].resample(resample_unit).mean().fillna(0)
+        return avg_sentiment
+
+    # Process pre-COVID posts and restrict to the desired date range.
+    precovid_sentiment = process_posts(precovid_posts_file)
+    precovid_sentiment = precovid_sentiment['2016-01-01':'2019-12-31']
+
+    # Process main posts.
+    main_sentiment = process_posts(posts_file)
+
+    # Combine the two time series.
+    combined_sentiment = pd.concat([precovid_sentiment, main_sentiment])
+
+    # Create a full date range index based on the combined data and reindex,
+    # filling any missing periods with 0.
+    full_index = pd.date_range(
+        start=combined_sentiment.index.min(),
+        end=combined_sentiment.index.max(),
+        freq=resample_unit
+    )
+    combined_sentiment = combined_sentiment.reindex(full_index).fillna(0)
+
+    # Construct the metrics table with date strings as column labels.
+    metrics_table = pd.DataFrame(
+        {'Average Sentiment': combined_sentiment.values},
+        index=combined_sentiment.index.strftime('%d/%m/%Y')
+    ).transpose()
+
+    return metrics_table
+
+
+def get_positive_sentiment_metrics(
+    posts_file,
+    precovid_posts_file,
+    city='',
+    text_column='selftext',
+    resample_unit='W',
+    threshold=0.05
+):
+    """
+    Calculates and returns a metrics table of the number of posts with sentiment above a given threshold
+    (e.g., 0.05) over time using VADER, for both pre‑COVID and main datasets. Pre‑COVID metrics are computed
+    for the period 2016‑01‑01 to 2019‑12‑31. Any periods with missing sentiment values are filled with 0.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file containing at least 'id', 'created_utc', and the text column.
+    precovid_posts_file : str
+        Path to the pre‑COVID posts Parquet file.
+    city : str, optional
+        City name (or context) used for labeling (not directly used in calculations).
+    text_column : str, optional
+        The column in the posts file that contains the post text (default 'selftext').
+    resample_unit : str, optional
+        Pandas resample frequency (default 'W' for weekly).
+    threshold : float, optional
+        Sentiment threshold above which a post is counted as "positive" (default 0.05).
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with a single row labeled 'Positive Sentiment Count'
+        and columns corresponding to resampled time periods (formatted as DD/MM/YYYY),
+        containing the positive sentiment post counts.
+    """
+    import pandas as pd
+    import nltk
+    from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+    # Ensure the VADER lexicon is available.
+    try:
+        nltk.data.find('sentiment/vader_lexicon.zip')
+    except LookupError:
+        print("VADER lexicon not found. Downloading...")
+        nltk.download('vader_lexicon')
+        
+    sid = SentimentIntensityAnalyzer()
+
+    def process_posts(posts_path):
+        # Read only the necessary columns from the Parquet file.
+        posts = pd.read_parquet(posts_path, columns=['id', 'created_utc', text_column])
+        
+        # Clean and filter out posts with missing or empty text.
+        posts[text_column] = posts[text_column].fillna('').astype(str)
+        posts = posts[posts[text_column].str.strip() != '']
+        
+        # Convert Unix timestamp to datetime and set as index.
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+        posts.set_index('created_datetime', inplace=True)
+        
+        # Compute sentiment scores using VADER.
+        posts['sentiment'] = posts[text_column].apply(lambda x: sid.polarity_scores(x)['compound'])
+        
+        # Identify positive posts based on the threshold.
+        posts['is_positive'] = (posts['sentiment'] > threshold).astype(int)
+        
+        # Resample the positive post counts over the specified time unit and fill missing periods with 0.
+        positive_count = posts['is_positive'].resample(resample_unit).sum().fillna(0)
+        return positive_count
+
+    # Process pre‑COVID posts and restrict to the desired date range.
+    precovid_positive = process_posts(precovid_posts_file)
+    precovid_positive = precovid_positive['2016-01-01':'2019-12-31']
+
+    # Process main posts.
+    main_positive = process_posts(posts_file)
+
+    # Combine the two time series.
+    combined_positive = pd.concat([precovid_positive, main_positive])
+
+    # Create a full date range index based on the combined data and reindex,
+    # filling any missing periods with 0.
+    full_index = pd.date_range(
+        start=combined_positive.index.min(),
+        end=combined_positive.index.max(),
+        freq=resample_unit
+    )
+    combined_positive = combined_positive.reindex(full_index).fillna(0)
+
+    # Construct the metrics table with date strings as column labels.
+    metrics_table = pd.DataFrame(
+        {'Positive Sentiment Count': combined_positive.values},
+        index=combined_positive.index.strftime('%d/%m/%Y')
+    ).transpose()
+
+    return metrics_table
+
+
+def get_negative_sentiment_metrics(
+    posts_file,
+    precovid_posts_file,
+    city='',
+    text_column='selftext',
+    resample_unit='W',
+    threshold=-0.05
+):
+    """
+    Calculates and returns a metrics table of the number of posts with sentiment below a given threshold
+    (e.g., -0.05) over time using VADER, for both pre‑COVID and main datasets. Pre‑COVID metrics are computed
+    for the period 2016‑01‑01 to 2019‑12‑31. Any periods with missing sentiment values are filled with 0.
+
+    Parameters
+    ----------
+    posts_file : str
+        Path to the main posts Parquet file containing at least 'id', 'created_utc', and the text column.
+    precovid_posts_file : str
+        Path to the pre‑COVID posts Parquet file.
+    city : str, optional
+        City name (or context) used for labeling (not directly used in calculations).
+    text_column : str, optional
+        The column in the posts file that contains the post text (default 'selftext').
+    resample_unit : str, optional
+        Pandas resample frequency (default 'W' for weekly).
+    threshold : float, optional
+        Sentiment threshold below which a post is counted as "negative" (default -0.05).
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame with a single row labeled 'Negative Sentiment Count'
+        and columns corresponding to resampled time periods (formatted as DD/MM/YYYY).
+    """
+    import pandas as pd
+    import nltk
+    from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+    # Ensure the VADER lexicon is available.
+    try:
+        nltk.data.find('sentiment/vader_lexicon.zip')
+    except LookupError:
+        print("VADER lexicon not found. Downloading...")
+        nltk.download('vader_lexicon')
+        
+    sid = SentimentIntensityAnalyzer()
+
+    def process_posts(posts_path):
+        # Read only the necessary columns from the Parquet file.
+        posts = pd.read_parquet(posts_path, columns=['id', 'created_utc', text_column])
+        
+        # Clean up text data: fill missing values and remove empty text.
+        posts[text_column] = posts[text_column].fillna('').astype(str)
+        posts = posts[posts[text_column].str.strip() != '']
+        
+        # Convert Unix timestamp to datetime and set as index.
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+        posts.set_index('created_datetime', inplace=True)
+        
+        # Compute sentiment scores using VADER.
+        posts['sentiment'] = posts[text_column].apply(lambda x: sid.polarity_scores(x)['compound'])
+        
+        # Identify negative posts based on the threshold.
+        posts['is_negative'] = (posts['sentiment'] < threshold).astype(int)
+        
+        # Resample the negative counts over the specified time unit and fill missing periods with 0.
+        negative_post_count = posts['is_negative'].resample(resample_unit).sum().fillna(0)
+        return negative_post_count
+
+    # Process pre‑COVID posts and restrict to the desired date range.
+    precovid_negative = process_posts(precovid_posts_file)
+    precovid_negative = precovid_negative['2016-01-01':'2019-12-31']
+
+    # Process main posts.
+    main_negative = process_posts(posts_file)
+
+    # Combine the two time series.
+    combined_negative = pd.concat([precovid_negative, main_negative])
+
+    # Create a full date range index based on the combined data and reindex,
+    # filling any missing periods with 0.
+    full_index = pd.date_range(
+        start=combined_negative.index.min(),
+        end=combined_negative.index.max(),
+        freq=resample_unit
+    )
+    combined_negative = combined_negative.reindex(full_index).fillna(0)
+
+    # Construct the metrics table with date strings as column labels.
+    metrics_table = pd.DataFrame(
+        {'Negative Sentiment Count': combined_negative.values},
+        index=combined_negative.index.strftime('%d/%m/%Y')
+    ).transpose()
+
+    return metrics_table
+
+
+# ---- END OF GET TIME SERIES ---- #
+
+
 def load_liwc_dictionary(dictionary_path):
     liwc_dict = {}
     with open(dictionary_path, 'r', encoding='utf-8') as file:
@@ -3002,7 +4197,7 @@ def get_liwc_percentage_metrics(
 
 def save_timeseries_metrics_for_cities(city_dict):
     
-    output_dir = "../metrics_test"
+    output_dir = "../metrics"
     os.makedirs(output_dir, exist_ok=True)
 
     for city_key, city_name in city_dict.items():
@@ -3070,28 +4265,32 @@ def save_timeseries_metrics_for_cities(city_dict):
             time_diff_unit='minutes'
         )
 
-        liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
-        category_map = load_category_mapping(category_mapping_path)
-
-
-        affect_metrics = get_liwc_percentage_metrics(
+        post_sentiment_metrics = get_post_sentiment_metrics(
             submissions_path,
+            comments_path,
             prophet_train_submissions_path,
-            liwc_dict,
-            category_map,
-            "affect",
-            text_column='selftext',
-            resample_unit='W'
+            prophet_train_comments_path,
+            city=city_lower,
+            resample_unit='W',
+            text_column='selftext'
         )
-        
-        affect_metrics = get_liwc_percentage_metrics(
+
+        positive_sentiment_metrics = get_positive_sentiment_metrics(
             submissions_path,
             prophet_train_submissions_path,
-            liwc_dict,
-            category_map,
-            "affect",
+            city=city_lower,
             text_column='selftext',
-            resample_unit='W'
+            resample_unit='W',
+            threshold=0.05
+        )
+
+        negative_sentiment_metrics = get_negative_sentiment_metrics(
+            submissions_path,
+            prophet_train_submissions_path,
+            city=city_lower,
+            text_column='selftext',
+            resample_unit='W',
+            threshold=-0.05
         )
 
         combined_metrics = pd.concat([
@@ -3100,100 +4299,157 @@ def save_timeseries_metrics_for_cities(city_dict):
             comment_percentage_metrics, 
             lifespan_metrics, 
             response_metrics, 
-            cutoff_response_metrics, 
-            affect_metrics
+            cutoff_response_metrics,
+            post_sentiment_metrics,
+            positive_sentiment_metrics,
+            negative_sentiment_metrics
         ], axis=0)
 
         output_path = os.path.join(output_dir, f"{city_lower}_metrics.parquet")
         combined_metrics.to_parquet(output_path)
 
 
-# def save_liwc_timeseries_metrics_for_cities(city_dict):
-    
-#     output_dir = "../liwc_metrics"
-#     os.makedirs(output_dir, exist_ok=True)
+def save_timeseries_metrics_for_cities_2(city_dict, input_dir=None, output_dir="../metrics_test"):
+    """
+    For each city in `city_dict`, generate various time-series metrics and then either
+    update an existing parquet file (if found in input_dir) or write a new file in output_dir.
 
-#     for city_key, city_name in city_dict.items():
-#         city_lower = city_key.lower().replace(" ", "")
-#         submissions_path = f"../covid_data_parquet/{city_lower}_submissions.parquet"
-#         comments_path = f"../covid_data_parquet/{city_lower}_comments.parquet"
-#         prophet_train_submissions_path = f"../prophet_train_parquet/{city_lower}_submissions.parquet"
-#         prophet_train_comments_path = f"../prophet_train_parquet/{city_lower}_comments.parquet"
+    If a file exists (from input_dir) for a given city, then only new metric data (i.e., rows whose
+    'metric' value is not already present) is appended. Otherwise, if every metric is already in the file,
+    nothing is written.
+    """
+    os.makedirs(output_dir, exist_ok=True)
 
-#         liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
-#         category_map = load_category_mapping(category_mapping_path)
+    for city_key, city_name in city_dict.items():
+        city_lower = city_key.lower().replace(" ", "")
+        submissions_path = f"../covid_data_parquet/{city_lower}_submissions.parquet"
+        comments_path = f"../covid_data_parquet/{city_lower}_comments.parquet"
+        prophet_train_submissions_path = f"../prophet_train_parquet/{city_lower}_submissions.parquet"
+        prophet_train_comments_path = f"../prophet_train_parquet/{city_lower}_comments.parquet"
 
-#         affect = get_liwc_percentage_metrics(
-#             submissions_path,
-#             prophet_train_submissions_path,
-#             liwc_dict,
-#             category_map,
-#             "affect",
-#             text_column='selftext',
-#             resample_unit='W'
-#         )
-        
-#         posemo = get_liwc_percentage_metrics(
-#             submissions_path,
-#             prophet_train_submissions_path,
-#             liwc_dict,
-#             category_map,
-#             "posemo",
-#             text_column='selftext',
-#             resample_unit='W'
-#         )
+        # post_count_metrics = get_raw_post_count_metrics(
+        #     submissions_path,
+        #     comments_path,
+        #     prophet_train_submissions_path,
+        #     prophet_train_comments_path,
+        #     city=city_lower,
+        #     resample_unit='W'
+        # ).copy()
+        # post_count_metrics['metric'] = 'post_count'
 
-#         negemo = get_liwc_percentage_metrics(
-#             submissions_path,
-#             prophet_train_submissions_path,
-#             liwc_dict,
-#             category_map,
-#             "negemo",
-#             text_column='selftext',
-#             resample_unit='W'
-#         )
+        # comment_count_metrics = get_raw_comment_count_metrics(
+        #     submissions_path,
+        #     comments_path,
+        #     prophet_train_submissions_path,
+        #     prophet_train_comments_path,
+        #     city=city_lower,
+        #     resample_unit='W'
+        # ).copy()
+        # comment_count_metrics['metric'] = 'comment_count'
 
-#         anx = get_liwc_percentage_metrics(
-#             submissions_path,
-#             prophet_train_submissions_path,
-#             liwc_dict,
-#             category_map,
-#             "anx",
-#             text_column='selftext',
-#             resample_unit='W'
-#         )
+        # comment_percentage_metrics = get_comment_percentage_metrics(
+        #     submissions_path,
+        #     comments_path,
+        #     prophet_train_submissions_path,
+        #     prophet_train_comments_path,
+        #     city=city_lower,
+        #     resample_unit='W'
+        # ).copy()
+        # comment_percentage_metrics['metric'] = 'comment_percentage'
 
-#         anger = get_liwc_percentage_metrics(
-#             submissions_path,
-#             prophet_train_submissions_path,
-#             liwc_dict,
-#             category_map,
-#             "anx",
-#             text_column='selftext',
-#             resample_unit='W'
-#         )
+        # lifespan_metrics = get_post_lifespan_timeseries(
+        #     submissions_path,
+        #     comments_path,
+        #     prophet_train_submissions_path,
+        #     prophet_train_comments_path,
+        #     city=city_lower,
+        #     aggregation='weekly',
+        #     units='hours',
+        #     statistic='mean'
+        # ).copy()
+        # lifespan_metrics['metric'] = 'lifespan'
 
-#         sad = get_liwc_percentage_metrics(
-#             submissions_path,
-#             prophet_train_submissions_path,
-#             liwc_dict,
-#             category_map,
-#             "anx",
-#             text_column='selftext',
-#             resample_unit='W'
-#         )
+        # response_metrics = get_response_times_data(
+        #     submissions_path,
+        #     comments_path,
+        #     prophet_train_submissions_path,
+        #     prophet_train_comments_path,
+        #     city=city_lower,
+        #     time_unit='W',
+        #     time_diff_unit='minutes'
+        # ).copy()
+        # response_metrics['metric'] = 'response'
 
-#         combined_metrics = pd.concat([
-#             affect,
-#             posemo,
-#             negemo,
-#             anx,
-#             anger,
-#             sad
-#         ], axis=0)
+        # cutoff_response_metrics = get_response_times_data_with_cutoff(
+        #     submissions_path,
+        #     comments_path,
+        #     prophet_train_submissions_path,
+        #     prophet_train_comments_path,
+        #     city=city_lower,
+        #     time_unit='W',
+        #     time_diff_unit='minutes'
+        # ).copy()
+        # cutoff_response_metrics['metric'] = 'cutoff_response'
 
-#         output_path = os.path.join(output_dir, f"{city_lower}_liwc_metrics.parquet")
-#         combined_metrics.to_parquet(output_path)
+        # combined_metrics = pd.concat([
+        #     post_count_metrics, 
+        #     comment_count_metrics, 
+        #     comment_percentage_metrics, 
+        #     lifespan_metrics, 
+        #     response_metrics, 
+        #     cutoff_response_metrics,
+        # ], axis=0)
+
+        post_sentiment_metrics = get_post_sentiment_metrics(
+            submissions_path,
+            comments_path,  
+            prophet_train_submissions_path,
+            prophet_train_submissions_path, 
+            city=city_lower,
+            resample_unit='W',
+            text_column='selftext'
+        )
+        post_sentiment_metrics = post_sentiment_metrics.copy()
+        post_sentiment_metrics['metric'] = 'post_sentiment'
+
+        combined_metrics = pd.concat([
+            post_sentiment_metrics,
+        ], axis=0)
+
+        file_name = f"{city_lower}_metrics.parquet"
+
+        if input_dir is not None:
+            target_path = os.path.join(input_dir, file_name)
+            output_path = os.path.join(output_dir, file_name)
+            if os.path.exists(target_path):
+                existing_metrics = pd.read_parquet(target_path)
+
+                # If the file already has a 'metric' column, we can safely check for duplicates.
+                if 'metric' in existing_metrics.columns:
+                    existing_metric_names = set(existing_metrics['metric'].unique())
+                    # Identify rows in the new data that have a metric not already in the file.
+                    new_rows = combined_metrics[~combined_metrics['metric'].isin(existing_metric_names)]
+
+                    if not new_rows.empty:
+                        # Merge old and new metrics.
+                        merged_metrics = pd.concat([existing_metrics, new_rows], axis=0)
+                        merged_metrics.to_parquet(output_path)
+                        print(f"Updated {output_path} with new metrics: {new_rows['metric'].unique().tolist()}")
+                    else:
+                        print(f"No new metrics for {city_lower} in {target_path}.")
+                    # Finished updating this city; move on to the next.
+                    continue
+                else:
+                    # If the file exists but does not have a 'metric' column, assume its structure is unexpected.
+                    # Overwrite it with the combined metrics.
+                    combined_metrics.to_parquet(output_path)
+                    print(f"Overwrote {output_path} (no 'metric' column found) with combined metrics.")
+                    continue
+
+        # If no matching file was found in input_dir, write a new file to the output directory.
+        output_path = os.path.join(output_dir, file_name)
+        combined_metrics.to_parquet(output_path)
+        print(f"Wrote new metrics file {output_path}.")
 
 
 def save_liwc_timeseries_metrics_for_cities(city_dict, categories):
@@ -4189,6 +5445,7 @@ if __name__ == "__main__":
         "swear",
         "social",
         "family",
+        "friend",
         "humans",
         "incl",
         "excl",
@@ -4256,7 +5513,11 @@ if __name__ == "__main__":
     
     # remove_automoderator_data(cities, source_folder="../prophet_train_parquet", target_folder="../prophet_train_parquet")
 
-    save_liwc_timeseries_metrics_for_cities(city_dict, categories)
+    # save_timeseries_metrics_for_cities_2(city_dict)
+    
+    # save_timeseries_metrics_for_cities(city_dict)
+    
+    # save_liwc_timeseries_metrics_for_cities(city_dict, categories)
 
     # plot_two_clusters_timeseries("../aggregated_cluster_metrics.parquet", "../lifespan_clusters.png")
 
@@ -4324,42 +5585,7 @@ if __name__ == "__main__":
     #     n_jobs=-1
     # )
 
-    # plot_comment_percentage_time_window(
-    #     nyc_submissions_path,
-    #     nyc_comments_path,
-    #     nyc_precovid_submissions_path,
-    #     nyc_precovid_comments_path,
-    #     city="newyorkcity",
-    #     resample_unit='W',  # 'W' for weekly, 'D' for daily, 'M' for monthly, etc.
-    #     save_plot=True,
-    #     plot_path=f'../newyorkcity_comment_percentage_same_week.png',
-    #     display_plot=False
-    # )
-
-    # plot_post_count(
-    #     nyc_submissions_path, 
-    #     nyc_comments_path,
-    #     nyc_precovid_submissions_path,
-    #     nyc_precovid_comments_path, 
-    #     city="newyorkcity", 
-    #     resample_unit='W', 
-    #     save_plot=True, 
-    #     plot_path=f'../newyorkcity_post_count.png', 
-    #     display_plot=False
-    # )
-
-    # plot_response_times_with_cutoff(
-    #     nyc_submissions_path,
-    #     nyc_comments_path,
-    #     city="newyorkcity",
-    #     time_unit='W',
-    #     time_diff_unit='hours',
-    #     save_plot=True,
-    #     plot_path='../newyorkcity_average_response_times_cutoff.png',
-    #     display_plot=False
-    # )
-
-    # generate_graphs_for_cities(city_dict)
+    generate_graphs_for_cities(city_dict)
 
     # remove_automoderator_data(cities, source_folder="../precovid_data_parquet", target_folder="../precovid_data_parquet_2")
 
