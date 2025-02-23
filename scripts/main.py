@@ -30,6 +30,8 @@ from math import sqrt
 
 from joblib import Parallel, delayed
 
+import statsmodels.api as sm
+
 def extract_data_between_dates(input_file_path, output_file_path, start_date_str, end_date_str):
     """
     Extracts data from an NDJSON file within a specified date range and writes them to a JSON array.
@@ -4195,6 +4197,93 @@ def get_liwc_percentage_metrics(
     return metrics_table
 
 
+def get_liwc_percentage_metrics_2(
+    posts_file,
+    precovid_posts_file,
+    liwc_dict,
+    category_map,
+    emotion_word,
+    text_column='text',
+    resample_unit='W'
+):
+    def process_data(posts_path):
+        posts = pd.read_parquet(posts_path, columns=['created_utc', text_column])
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+        posts.sort_values('created_datetime', inplace=True)
+        posts['liwc_percentage'] = posts[text_column].apply(
+            lambda text: analyze_emotion(text, liwc_dict, category_map, emotion_word)
+        )
+        posts.set_index('created_datetime', inplace=True)
+        liwc_metric = posts['liwc_percentage'].resample(resample_unit).mean()
+        return liwc_metric
+
+    precovid_liwc = process_data(precovid_posts_file)
+    precovid_liwc = precovid_liwc['2016-01-01':'2019-12-31']
+
+    main_liwc = process_data(posts_file)
+
+    combined_liwc = pd.concat([precovid_liwc, main_liwc])
+
+    full_index = pd.date_range(
+        start=combined_liwc.index.min(),
+        end=combined_liwc.index.max(),
+        freq=resample_unit
+    )
+    combined_liwc = combined_liwc.reindex(full_index)
+    combined_liwc = combined_liwc.interpolate()
+
+    combined_liwc = combined_liwc.sort_index()
+
+    metrics_table = pd.DataFrame(
+        {f'LIWC Percentage for {emotion_word}': combined_liwc.values},
+        index=combined_liwc.index.strftime('%d/%m/%Y')
+    )
+    return metrics_table
+
+
+def get_liwc_percentage_metrics_combined_texts(
+    text_file,
+    liwc_dict,
+    category_map,
+    emotion_word,
+    text_column='text',
+    resample_unit='W'
+):
+    import pandas as pd
+
+    def process_data(posts_path):
+        posts = pd.read_parquet(posts_path, columns=['created_utc', text_column])
+        posts['created_datetime'] = pd.to_datetime(posts['created_utc'], unit='s')
+        posts.sort_values('created_datetime', inplace=True)
+
+        posts['liwc_percentage'] = posts[text_column].apply(
+            lambda text: analyze_emotion(text, liwc_dict, category_map, emotion_word)
+        )
+
+        posts.set_index('created_datetime', inplace=True)
+
+        liwc_metric = posts['liwc_percentage'].resample(resample_unit).mean()
+        return liwc_metric
+
+    combined_liwc = process_data(text_file)
+
+    full_index = pd.date_range(
+        start=combined_liwc.index.min(),
+        end=combined_liwc.index.max(),
+        freq=resample_unit
+    )
+    combined_liwc = combined_liwc.reindex(full_index)
+
+    combined_liwc = combined_liwc.interpolate()
+    
+    metrics_table = pd.DataFrame(
+        {f'LIWC Percentage for {emotion_word}': combined_liwc.values},
+        index=combined_liwc.index.strftime('%d/%m/%Y')
+    ).transpose()
+
+    return metrics_table
+
+
 def save_timeseries_metrics_for_cities(city_dict):
     
     output_dir = "../metrics"
@@ -4485,6 +4574,129 @@ def save_liwc_timeseries_metrics_for_cities(city_dict, categories):
         combined_metrics.to_parquet(output_path)
 
 
+def save_liwc_timeseries_metrics_for_cities_transposed(city_dict, categories):
+    output_dir = "../liwc_metrics_2"
+    os.makedirs(output_dir, exist_ok=True)
+
+    for city_key, city_name in city_dict.items():
+        city_lower = city_key.lower().replace(" ", "")
+        submissions_path = f"../covid_data_parquet/{city_lower}_submissions.parquet"
+        comments_path = f"../covid_data_parquet/{city_lower}_comments.parquet"
+        prophet_train_submissions_path = f"../prophet_train_parquet/{city_lower}_submissions.parquet"
+        prophet_train_comments_path = f"../prophet_train_parquet/{city_lower}_comments.parquet"
+
+        liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
+        category_map = load_category_mapping(category_mapping_path)
+
+        combined_metrics = None
+
+        for category in categories:
+            metric_df = get_liwc_percentage_metrics_2(
+                submissions_path,
+                prophet_train_submissions_path,
+                liwc_dict,
+                category_map,
+                category,
+                text_column='selftext',
+                resample_unit='W'
+            )
+
+            if "timestamp" not in metric_df.columns:
+                metric_df = metric_df.reset_index().rename(columns={'index': 'timestamp'})
+            
+            if metric_df.shape[0] == 1 and metric_df.shape[1] > 1:
+                metric_df = metric_df.transpose().reset_index()
+                metric_df = metric_df.rename(columns={"index": "timestamp", metric_df.columns[1]: category})
+            else:
+                metric_value_cols = [col for col in metric_df.columns if col != "timestamp"]
+                if len(metric_value_cols) != 1:
+                    raise ValueError(
+                        f"Expected one metric column besides 'timestamp' in the DataFrame for category '{category}', found {metric_value_cols}."
+                    )
+                metric_df = metric_df.rename(columns={metric_value_cols[0]: category})
+            
+            if combined_metrics is None:
+                combined_metrics = metric_df
+            else:
+                combined_metrics = pd.merge(combined_metrics, metric_df, on="timestamp", how="outer")
+
+        combined_metrics['timestamp'] = pd.to_datetime(combined_metrics['timestamp'], format='%d/%m/%Y')
+        combined_metrics = combined_metrics.sort_values("timestamp")
+        combined_metrics['timestamp'] = combined_metrics['timestamp'].dt.strftime('%d/%m/%Y')
+
+        output_path = os.path.join(output_dir, f"{city_lower}_liwc_metrics.parquet")
+        combined_metrics.to_parquet(output_path, index=False)
+        print(f"Saved {output_path}")
+
+
+def save_liwc_timeseries_metrics_for_cities_combined_texts(city_dict, categories):
+    output_dir = "../liwc_metrics"
+    os.makedirs(output_dir, exist_ok=True)
+
+    for city_key, city_name in city_dict.items():
+        city_lower = city_key.lower().replace(" ", "")
+
+        text_path = f"../liwc_texts/{city_lower}_texts.parquet"
+
+        liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
+        category_map = load_category_mapping(category_mapping_path)
+
+        metrics_list = []
+        for category in categories:
+            print(city_lower, category)
+            metric = get_liwc_percentage_metrics_combined_texts(
+                text_path,
+                liwc_dict,
+                category_map,
+                category,
+                text_column='text',
+                resample_unit='W'
+            )
+            metrics_list.append(metric)
+
+        combined_metrics = pd.concat(metrics_list, axis=0)
+
+        output_path = os.path.join(output_dir, f"{city_lower}_liwc_metrics.parquet")
+        combined_metrics.to_parquet(output_path)
+
+
+def smooth_timeseries(file_path, output_path, resample_unit='W'):
+    df = pd.read_parquet(file_path)
+    
+    try:
+        df.columns = pd.to_datetime(df.columns, format="%d/%m/%Y")
+    except Exception as e:
+        raise ValueError(f"Error converting column headers to datetime in {file_path}: {e}")
+    
+    df = df.T
+    df.index.name = "datetime"
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    print("Data range:", df.index.min(), "to", df.index.max())
+    
+    df = df.loc["2016-01-01":"2021-12-31"]
+    
+    df_resampled = df.resample(resample_unit).mean().interpolate()
+    
+    smoothed_series = {}
+    x = range(len(df_resampled))
+    
+    for metric in df_resampled.columns:
+        y = df_resampled[metric].values
+        # LOESS smoothing with a span (frac) of 20%
+        smoothed = sm.nonparametric.lowess(y, x, frac=0.2)
+        smoothed_y = smoothed[:, 1]
+        smoothed_series[metric] = smoothed_y
+    
+    smoothed_df = pd.DataFrame(smoothed_series, index=df_resampled.index).T
+    smoothed_df.columns = smoothed_df.columns.strftime("%d/%m/%Y")
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    smoothed_df.to_parquet(output_path)
+    
+    return smoothed_df
+
+
 def cluster_cities_with_dtw_pyclustering(
     city_files_folder,
     output_file,
@@ -4664,20 +4876,6 @@ def cluster_cities_with_dtw_pyclustering(
 
 
 def aggregate_metrics_by_cluster(metrics_path, clusters_path, output_path, metric, aggregation="mean"):
-    """
-    Aggregates time series data for each cluster group based on the cluster assignments
-    in the clusters.parquet file and the metrics stored in the metrics_path.
-
-    Parameters:
-    - metrics_path (str): Path to the folder containing city-specific metrics parquet files.
-    - clusters_path (str): Path to the clusters.parquet file containing city-to-cluster assignments.
-    - output_path (str): Path to save the aggregated metrics parquet file.
-    - aggregation (str): Aggregation method ('mean', 'median', etc.). Default is 'mean'.
-
-    Saves:
-    - A single parquet file with aggregated metrics for each cluster.
-    """
-
     clusters_df = pd.read_parquet(clusters_path)
     clusters = clusters_df.set_index("City")["Cluster"]
 
@@ -4733,16 +4931,6 @@ def aggregate_metrics_by_cluster(metrics_path, clusters_path, output_path, metri
 
 
 def plot_two_clusters_timeseries(parquet_file_path, save_path=None):
-    """
-    Reads a parquet file that contains:
-      - An index column named '_index_level_0' representing timestamps
-      - Two columns: 'cluster_0' and 'cluster_1' for time series data
-    Plots both time series on the same figure, and optionally saves the plot.
-
-    :param parquet_file_path: Path to the Parquet file.
-    :param save_path: (Optional) Path to save the generated plot. If None, 
-                      the plot will not be saved.
-    """
     df = pd.read_parquet(parquet_file_path)
 
     if '_index_level_0' in df.columns:
@@ -4766,15 +4954,29 @@ def plot_two_clusters_timeseries(parquet_file_path, save_path=None):
     plt.show()
 
 
-def predict_and_plot_cluster_aggregates(aggregated_data_path, output_plot_path):
-    """
-    Trains a time series model on all data before January 1, 2020,
-    and plots predictions against actual observed aggregate scores from January 1, 2020 onwards.
+def plot_clusters_timeseries(parquet_file_path, title, yaxis, save_path=None):
+    df = pd.read_parquet(parquet_file_path)
 
-    Parameters:
-    - aggregated_data_path (str): Path to the aggregated cluster metrics parquet file.
-    - output_plot_path (str): Path to save the prediction and actual comparison plot.
-    """
+    if '_index_level_0' in df.columns:
+        df = df.set_index('_index_level_0')
+
+    plt.figure(figsize=(10, 6))
+    
+    for col in df.columns:
+        plt.plot(df.index, df[col], label=col)
+
+    plt.title(title)
+    plt.xlabel('Time')
+    plt.ylabel(yaxis)
+    plt.legend()
+    plt.grid(True)
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+
+
+def predict_and_plot_cluster_aggregates(aggregated_data_path, output_plot_path):
     data = pd.read_parquet(aggregated_data_path)
     data.index = pd.to_datetime(data.index)
 
@@ -4821,17 +5023,6 @@ def predict_and_plot_cluster_aggregates(aggregated_data_path, output_plot_path):
 
 
 def predict_and_plot_time_series(data_path, metric_name, output_plot_path):
-    """
-    Fits a Prophet model on data before January 1, 2020, for a specified metric,
-    and plots the forecast against actual data from January 1, 2020, onwards.
-
-    Parameters:
-    - data_path (str): Path to the city-level parquet file containing the *wide* time series data 
-                       (date columns, metric rows).
-    - metric_name (str): Name of the metric (one of the columns after transposing) to forecast.
-    - output_plot_path (str): Path to save the prediction/actual comparison plot.
-    """
-
     data = pd.read_parquet(data_path)
 
     data.columns = pd.to_datetime(data.columns, format="%d/%m/%Y")
@@ -4891,30 +5082,6 @@ def predict_and_plot_time_series(data_path, metric_name, output_plot_path):
 
 
 def train_and_validate_prophet(train_df, test_df, freq='D'):
-    """
-    Train a Prophet model on 'train_df' (with columns ['ds', 'y']).
-    Then predict over the test period and compute MAE/RMSE on 'test_df'.
-
-    Parameters
-    ----------
-    train_df : pd.DataFrame
-        Training slice with columns ['ds', 'y'].
-    test_df : pd.DataFrame
-        Test slice with columns ['ds', 'y'].
-    freq : str
-        Frequency for future dataframe (e.g. 'D', 'W').
-
-    Returns
-    -------
-    model : Prophet
-        Fitted Prophet model.
-    forecast : pd.DataFrame
-        Forecast for the entire (train + test) date range.
-    mae : float
-        Mean absolute error on test set.
-    rmse : float
-        Root mean squared error on test set.
-    """
     model = Prophet(weekly_seasonality=True)
     model.fit(train_df)
 
@@ -4943,28 +5110,6 @@ def predict_and_plot_single_df(
     post_test_start='2020-01-01',
     freq='D'
 ):
-    """
-    1) Loads a single DataFrame from 'aggregated_data_path'.
-    2) For each cluster (column):
-       - Slices the DataFrame into train (2019-07-01 -> 2019-09-30)
-         and test  (2019-10-01 -> 2019-12-31)
-       - Trains and validates Prophet (computes MAE, RMSE)
-       - Forecasts after 2020-01-01
-       - Plots observed vs. predicted
-
-    Parameters
-    ----------
-    aggregated_data_path : str
-        Path to the single parquet file with all data.
-    output_plot_path : str
-        Where to save the final plot.
-    train_start, train_end, test_start, test_end : str
-        Date ranges for train and test.
-    post_test_start : str
-        Start date for final “observed vs. predicted” plotting.
-    freq : str
-        Frequency for Prophet (e.g., 'D' or 'W').
-    """
     data = pd.read_parquet(aggregated_data_path)
     data.index = pd.to_datetime(data.index)
     data = data.sort_index()
@@ -5052,6 +5197,26 @@ def predict_and_plot_single_df(
     print("Validation Metrics:")
     print(metrics_df)
     return metrics_df
+
+
+def combine_texts(covid_posts_path, covid_comments_path, prophet_posts_path, prophet_comments_path, output_path):
+    covid_posts = pd.read_parquet(covid_posts_path)
+    covid_comments = pd.read_parquet(covid_comments_path)
+    precovid_posts = pd.read_parquet(prophet_posts_path)
+    precovid_comments = pd.read_parquet(prophet_comments_path)
+
+    covid_post_texts = [{'text': covid_posts['title'][i] + " " + j, 'created_utc': int(covid_posts['created_utc'][i])} for i, j in enumerate(covid_posts['selftext']) if j != '' and j != '[deleted]' and j != '[removed]']
+    covid_comment_texts = [{'text': j, 'created_utc': int(covid_comments['created_utc'][i])} for i, j in enumerate(covid_comments['body']) if j != '' and j != '[deleted]' and j != '[removed]']
+   
+    precovid_post_texts = [{'text': precovid_posts['title'][i] + " " + j, 'created_utc': int(precovid_posts['created_utc'][i])} for i, j in enumerate(precovid_posts['selftext']) if j != '' and j != '[deleted]' and j != '[removed]']
+    precovid_comment_texts = [{'text': j, 'created_utc': int(precovid_comments['created_utc'][i])} for i, j in enumerate(precovid_comments['body']) if j != '' and j != '[deleted]' and j != '[removed]']
+
+    texts = precovid_post_texts + precovid_comment_texts + covid_post_texts + covid_comment_texts
+
+    df = pd.DataFrame(texts)
+    df.sort_values('created_utc', inplace=True)
+
+    df.to_parquet(output_path, index=False)
 
 
 if __name__ == "__main__":
@@ -5443,34 +5608,41 @@ if __name__ == "__main__":
         "anger",
         "sad",
         "swear",
+        "achieve",
         "social",
+        "we",
         "family",
         "friend",
-        "humans",
-        "incl",
-        "excl",
-        "cogmech",
-        "insight",
         "cause",
-        "discrep",
         "tentat",
-        "certain"
-        # "percept",
-        # "see",
-        # "hear",
-        # "feel",
-        # "bio",
-        # "body",
-        # "health",
-        # "ingest",
-        # "relativ",
-        # "motion",
-        # "space",
-        # "time",
-        # "work",
-        # "achieve",
-        # "money"
+        "certain",
+        "insight",
+        "health",
+        "ingest",
+        "bio",
+        "body",
+        "motion",
+        "space",
+        "time",
+        "home",
+        "work",
+        "money"
     ]
+
+    # combine_texts("../covid_data_parquet/albuquerque_submissions.parquet", 
+    #               "../covid_data_parquet/albuquerque_comments.parquet", 
+    #               "../prophet_train_parquet/albuquerque_submissions.parquet",
+    #               "../prophet_train_parquet/albuquerque_comments.parquet",
+    #               "albuquerque_texts.parquet")
+
+    # for city in cities:
+    #     combine_texts(
+    #         f"../covid_data_parquet/{city}_submissions.parquet", 
+    #         f"../covid_data_parquet/{city}_comments.parquet", 
+    #         f"../prophet_train_parquet/{city}_submissions.parquet",
+    #         f"../prophet_train_parquet/{city}_comments.parquet",
+    #         f"../liwc_texts/{city}_texts.parquet"
+    #     )
 
 
     # df = pd.read_parquet("../response_cutoff_clusters.parquet")
@@ -5513,13 +5685,15 @@ if __name__ == "__main__":
     
     # remove_automoderator_data(cities, source_folder="../prophet_train_parquet", target_folder="../prophet_train_parquet")
 
-    # save_timeseries_metrics_for_cities_2(city_dict)
-    
-    # save_timeseries_metrics_for_cities(city_dict)
+    # save_liwc_timeseries_metrics_for_cities_combined_texts(city_dict, categories)
     
     # save_liwc_timeseries_metrics_for_cities(city_dict, categories)
+    # save_liwc_timeseries_metrics_for_cities_transposed(city_dict, categories)
 
-    # plot_two_clusters_timeseries("../aggregated_cluster_metrics.parquet", "../lifespan_clusters.png")
+    # predict_and_plot_cluster_aggregates(
+    #     aggregated_data_path="../liwc_cluster_aggregated_metrics/aggregated_motion.parquet",
+    #     output_plot_path="../motion_forecast.png"
+    # )
 
     # predict_and_plot_single_df(
     #     aggregated_data_path="../aggregated_cluster_metrics.parquet",
@@ -5560,6 +5734,57 @@ if __name__ == "__main__":
     #     selected_cities=None
     # )
 
+    # cluster_cities_with_dtw_pyclustering(
+    #     city_files_folder="../liwc_metrics",
+    #     output_file="../liwc_clusters/affect_clusters.parquet",
+    #     metric_name="LIWC Percentage for affect",
+    #     resample_unit="W",
+    #     max_clusters=10,
+    #     n_jobs=-1,
+    #     selected_cities=None
+    # )
+
+    # cluster_cities_with_dtw_pyclustering(
+    #     city_files_folder="../liwc_metrics",
+    #     output_file="../liwc_clusters/affect_clusters.parquet",
+    #     metric_name="LIWC Percentage for affect",
+    #     resample_unit="W",
+    #     max_clusters=10,
+    #     n_jobs=-1,
+    #     selected_cities=None
+    # )
+
+    # for category in categories:
+    #     cluster_cities_with_dtw_pyclustering(
+    #         city_files_folder="../liwc_metrics_smoothed",
+    #         output_file=f"../liwc_clusters/{category}_clusters.parquet",
+    #         metric_name=f"LIWC Percentage for {category}",
+    #         resample_unit="W",
+    #         max_clusters=10,
+    #         n_jobs=-1,
+    #         selected_cities=None
+    #     )
+
+    # for category in categories:
+    #     aggregate_metrics_by_cluster(
+    #         metrics_path="../liwc_metrics",
+    #         clusters_path=f"../liwc_clusters/{category}_clusters.parquet",
+    #         output_path=f"../liwc_cluster_aggregated_metrics/aggregated_{category}.parquet",
+    #         metric=f"LIWC Percentage for {category}",
+    #         aggregation="mean"
+    #     )
+
+    for city in cities:
+        smooth_timeseries(f"../liwc_metrics/{city}_liwc_metrics.parquet", f"../liwc_metrics_smoothed/{city}_liwc_metrics.parquet", resample_unit="D")
+
+
+    # plot_two_clusters_timeseries("../aggregated_cluster_metrics.parquet", "../lifespan_clusters.png")
+    
+    # plot_two_clusters_timeseries("../aggregated_cluster_metrics.parquet", "../lifespan_clusters.png")
+
+    for category in categories:
+        plot_clusters_timeseries(f"../liwc_cluster_aggregated_metrics/aggregated_{category}.parquet", f"Clustered Intensities of LIWC {category} Category", "Intensity", f"../liwc_cluster_graphs/{category}_clusters.png")
+
     # aggregate_metrics_by_cluster(
     #     metrics_path="../metrics",
     #     clusters_path="../comments_percentage_clusters.parquet",
@@ -5585,7 +5810,7 @@ if __name__ == "__main__":
     #     n_jobs=-1
     # )
 
-    generate_graphs_for_cities(city_dict)
+    # generate_graphs_for_cities(city_dict)
 
     # remove_automoderator_data(cities, source_folder="../precovid_data_parquet", target_folder="../precovid_data_parquet_2")
 
