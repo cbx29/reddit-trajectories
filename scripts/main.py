@@ -32,6 +32,12 @@ from joblib import Parallel, delayed
 
 import statsmodels.api as sm
 
+import itertools
+
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import LabelEncoder
+
+
 def extract_data_between_dates(input_file_path, output_file_path, start_date_str, end_date_str):
     """
     Extracts data from an NDJSON file within a specified date range and writes them to a JSON array.
@@ -362,7 +368,7 @@ def calculate_spearman_correlation(cities, city_populations, type):
     print(spearman_corr, p_value)
 
 
-def count_unique_authors(parquet_file):
+def count_unique_authors_parquet(parquet_file):
     """
     Counts the number of unique authors in a Parquet file using the 'author' field.
 
@@ -1472,7 +1478,7 @@ def calculate_and_plot_post_lifespan_timeseries(
         return aggregated_df
     
 
-def plot_response_times(posts_file, comments_file, city='', time_unit='W', time_diff_unit='minutes', save_plot=False, plot_path='average_response_times.png', display_plot=True):
+def calculate_and_plot_response_times(posts_file, comments_file, city='', time_unit='W', time_diff_unit='minutes', save_plot=False, plot_path='average_response_times.png', display_plot=True):
     """
     Plots the average response times of city subreddit posts.
 
@@ -4660,6 +4666,92 @@ def save_liwc_timeseries_metrics_for_cities_combined_texts(city_dict, categories
         combined_metrics.to_parquet(output_path)
 
 
+def normalise_timeseries(input_path, output_path):
+    """
+    Normalise the disaster period (2020–2022) data in a parquet file of time series.
+    
+    The input parquet file is expected to have:
+      - Each row as a distinct metric.
+      - Each column as a date (weekly, represented as a string or datetime).
+    
+    The normalisation process is as follows:
+      1. Convert the columns to a DatetimeIndex.
+      2. Optionally resample the data to a given frequency (using the mean).
+      3. Define baseline (pre-disaster) period: 2016-01-01 to 2019-12-31.
+      4. Define disaster period: 2020-01-01 to 2022-12-31.
+      5. For each metric (row):
+         a. Compute the baseline mean (μ) and population standard deviation (σ) 
+            using data from the baseline period.
+         b. For each date in the disaster period, compute the normalised value:
+                (value - μ) / σ.
+         c. (If σ is zero for a metric, normalised disaster values are set to NaN.)
+      6. The baseline period data are left unchanged.
+      7. Save the resulting DataFrame (with metrics as rows and dates as columns) 
+         to the output parquet file.
+    
+    Parameters:
+      input_path (str): File path to the input parquet file.
+      output_path (str): File path to save the output parquet file.
+      resample_unit (str, optional): A pandas offset alias (e.g., 'W' for weekly, 
+                                     'M' for monthly). If provided, the data are resampled 
+                                     using the mean.
+    """
+    # Read the parquet file into a DataFrame.
+    df = pd.read_parquet(input_path)
+    
+    # The DataFrame is expected to have rows as metrics and columns as dates.
+    # To work with time series data, transpose the DataFrame so that dates become the index.
+    df = df.T
+
+    # Convert the index (dates) to datetime objects.
+    df.index = pd.to_datetime(df.index, format="%d/%m/%Y")
+    
+    # Define baseline and disaster periods.
+    # (Assumption: baseline period is 2016-01-01 to 2019-12-31 and 
+    #  disaster period is 2020-01-01 to 2022-12-31.)
+    baseline_start = pd.to_datetime("2016-01-01")
+    baseline_end   = pd.to_datetime("2019-12-31")
+    disaster_start = pd.to_datetime("2020-01-01")
+    disaster_end   = pd.to_datetime("2022-12-31")
+    
+    # Create boolean masks for selecting baseline and disaster period dates.
+    baseline_mask = (df.index >= baseline_start) & (df.index <= baseline_end)
+    disaster_mask = (df.index >= disaster_start) & (df.index <= disaster_end)
+    
+    # Make a copy to store normalised values.
+    normalised_df = df.copy()
+    
+    # Iterate over each metric (i.e., each column) to compute normalisation.
+    for metric in df.columns:
+        baseline_values = df.loc[baseline_mask, metric]
+        disaster_values = df.loc[disaster_mask, metric]
+        
+        # Compute baseline mean and population standard deviation.
+        mu = baseline_values.mean()
+        sigma = baseline_values.std(ddof=0)
+
+        print(mu, sigma)
+        
+        # Check for zero standard deviation to avoid division by zero.
+        if sigma == 0:
+            normalised_values = np.full(disaster_values.shape, np.nan)
+        else:
+            normalised_values = (disaster_values - mu) / sigma
+        
+        # Replace the disaster period data with normalised values.
+        normalised_df.loc[disaster_mask, metric] = normalised_values
+    
+    # Transpose the DataFrame back so that metrics are rows and dates are columns.
+    normalised_df = normalised_df.T
+    normalised_df.columns = normalised_df.columns.strftime("%d/%m/%Y")
+    
+    # Save the resulting DataFrame to the specified output parquet file.
+    normalised_df.to_parquet(output_path)
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    normalised_df.to_parquet(output_path)
+
+
 def smooth_timeseries(file_path, output_path, resample_unit='W'):
     df = pd.read_parquet(file_path)
     
@@ -4954,16 +5046,34 @@ def plot_two_clusters_timeseries(parquet_file_path, save_path=None):
     plt.show()
 
 
-def plot_clusters_timeseries(parquet_file_path, title, yaxis, save_path=None):
+def plot_clusters_timeseries(parquet_file_path, title, yaxis, start_date, end_date=None, save_path=None):
+    # Read the parquet file
     df = pd.read_parquet(parquet_file_path)
 
+    # If '_index_level_0' is a column, set it as the index
     if '_index_level_0' in df.columns:
         df = df.set_index('_index_level_0')
 
+    # Ensure the index is in datetime format
+    df.index = pd.to_datetime(df.index, format="%d/%m/%Y")
+
+    # Filter the DataFrame by the specified date range
+    df = df[df.index >= pd.to_datetime(start_date)]
+    if end_date is not None:
+        df = df[df.index <= pd.to_datetime(end_date)]
+
     plt.figure(figsize=(10, 6))
     
+    # Plot each column of the DataFrame
     for col in df.columns:
         plt.plot(df.index, df[col], label=col)
+    
+    # Plot a vertical dotted line on 01/01/2020 to indicate the start of COVID-19
+    covid_date = pd.to_datetime("01/01/2020", format="%d/%m/%Y")
+    plt.axvline(x=covid_date, color='red', linestyle=':', linewidth=1.5, label='COVID-19 Start')
+
+    # Plot a horizontal dotted line along y=0
+    plt.axhline(y=0, color='black', linestyle=':', linewidth=1.5, label='Zero Line')
 
     plt.title(title)
     plt.xlabel('Time')
@@ -4971,6 +5081,7 @@ def plot_clusters_timeseries(parquet_file_path, title, yaxis, save_path=None):
     plt.legend()
     plt.grid(True)
 
+    # Save the plot if a save path is provided
     if save_path:
         plt.savefig(save_path, bbox_inches='tight')
         print(f"Plot saved to {save_path}")
@@ -5217,6 +5328,339 @@ def combine_texts(covid_posts_path, covid_comments_path, prophet_posts_path, pro
     df.sort_values('created_utc', inplace=True)
 
     df.to_parquet(output_path, index=False)
+
+
+def dtw_distance(ts_a, ts_b):
+    """
+    Computes the DTW distance between two 1D time series and normalizes
+    the total cost by the length of the optimal warping path (i.e. returns
+    the average cost per step).
+    """
+    n, m = len(ts_a), len(ts_b)
+    dtw = np.full((n + 1, m + 1), np.inf)
+    dtw[0, 0] = 0
+
+    # Build the DTW cost matrix.
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = abs(ts_a[i - 1] - ts_b[j - 1])
+            dtw[i, j] = cost + min(dtw[i - 1, j],    # insertion
+                                   dtw[i, j - 1],    # deletion
+                                   dtw[i - 1, j - 1])  # match
+
+    # Backtrack to compute the length of the optimal warping path.
+    i, j = n, m
+    path_length = 0
+    while i > 0 or j > 0:
+        path_length += 1
+        if i == 0:
+            j -= 1
+        elif j == 0:
+            i -= 1
+        else:
+            if dtw[i - 1, j - 1] <= dtw[i - 1, j] and dtw[i - 1, j - 1] <= dtw[i, j - 1]:
+                i -= 1
+                j -= 1
+            elif dtw[i - 1, j] <= dtw[i, j - 1]:
+                i -= 1
+            else:
+                j -= 1
+
+    return dtw[n, m] / path_length
+
+
+def classify_dimension_trajectories(parquet_file_path, start_date, category, end_date=None, 
+                                    scale_threshold=0.5, shape_threshold=0.5):
+    """
+    For a given dimension represented by multiple clusters (columns in the parquet file),
+    this function computes:
+    
+    1. Characteristic Scale:
+       For each cluster, defined as the root-mean-square (RMS) magnitude of its average trajectory.
+       The pairwise scale difference is the absolute difference between the RMS values of two clusters.
+    
+    2. Shape Difference:
+       Each cluster's average trajectory is normalized by dividing by its largest absolute magnitude
+       (so that its maximum magnitude becomes 1). The pairwise shape difference is then estimated as 
+       the DTW distance between these normalized trajectories.
+    
+    The function computes these differences for all pairs of clusters and averages the results.
+    If both the average scale difference and average shape difference fall below their respective
+    thresholds (default: 0.5), the dimension is classified as having similar (or "universal") trajectories.
+    
+    Parameters:
+      parquet_file_path (str): Path to the parquet file.
+      start_date (str): Start date in a format parseable by pd.to_datetime.
+      end_date (str, optional): End date filter.
+      scale_threshold (float): Threshold for the average scale difference.
+      shape_threshold (float): Threshold for the average shape difference.
+    
+    Returns:
+      dict: Contains the averaged 'scale_difference', 'shape_difference', and 
+            'classification' (either 'universal' or 'distinct').
+    """
+    # Read the parquet file.
+    df = pd.read_parquet(parquet_file_path)
+    
+    # If '_index_level_0' exists, set it as the index.
+    if '_index_level_0' in df.columns:
+        df = df.set_index('_index_level_0')
+    
+    # Convert the index to datetime (assuming day/month/year format).
+    df.index = pd.to_datetime(df.index, format="%d/%m/%Y")
+    
+    # Filter the DataFrame by the specified date range.
+    df = df[df.index >= pd.to_datetime(start_date)]
+    if end_date is not None:
+        df = df[df.index <= pd.to_datetime(end_date)]
+    
+    clusters = df.columns.tolist()
+    if len(clusters) < 2:
+        raise ValueError("The data must contain at least two clusters for comparison.")
+    
+    # Compute characteristic scales and normalized trajectories for each cluster.
+    scales = {}
+    norm_trajectories = {}
+    for col in clusters:
+        traj = df[col].values
+        rms = np.sqrt(np.mean(traj ** 2))
+        scales[col] = rms
+        max_abs = np.max(np.abs(traj))
+        # Avoid division by zero.
+        norm_trajectories[col] = traj if max_abs == 0 else traj / max_abs
+    
+    # Compute pairwise differences.
+    scale_diffs = []
+    shape_diffs = []
+    for col_a, col_b in itertools.combinations(clusters, 2):
+        scale_diff_pair = abs(scales[col_a] - scales[col_b])
+        shape_diff_pair = dtw_distance(norm_trajectories[col_a], norm_trajectories[col_b])
+        scale_diffs.append(scale_diff_pair)
+        shape_diffs.append(shape_diff_pair)
+    
+    avg_scale_diff = np.mean(scale_diffs)
+    avg_shape_diff = np.mean(shape_diffs)
+    
+    classification = "universal" if (avg_scale_diff < scale_threshold and avg_shape_diff < shape_threshold) else "distinct"
+    
+    # Print results.
+    print("Characteristic Scales:")
+    for col in clusters:
+        print(f"  Cluster '{col}': RMS = {scales[col]:.3f}")
+    print(f"\nAverage Scale Difference: {avg_scale_diff:.3f}")
+    print(f"Average Shape Difference: {avg_shape_diff:.3f}")
+    print(f"Trajectory Classification: {classification}")
+    
+    return {
+        "category": category,
+        "scale_difference": avg_scale_diff,
+        "shape_difference": avg_shape_diff,
+        "classification": classification
+    }
+
+
+def plot_shape_vs_scale(parquet_file_path, save_path=None):
+    """
+    Reads a parquet file containing columns:
+    'category', 'scale_difference', 'shape_difference', and 'classification',
+    and then plots a scatter plot with:
+      - x-axis: shape_difference
+      - y-axis: scale_difference
+    Each point is labeled with its category name.
+    Additionally, vertical and horizontal dotted lines are drawn at 0.5 on both axes.
+    The x- and y-axes are set to always start at 0.
+    
+    Parameters:
+      parquet_file_path (str): Path to the parquet file.
+      save_path (str, optional): If provided, the plot will be saved to this path.
+    """
+    # Read the parquet file
+    df = pd.read_parquet(parquet_file_path)
+    
+    # Create a new figure
+    plt.figure(figsize=(10, 8))
+    
+    # Plot each category as a scatter point and add a text label.
+    for _, row in df.iterrows():
+        shape = row['shape_difference']
+        scale = row['scale_difference']
+        category = row['category']
+        plt.scatter(shape, scale, color='blue', s=50)
+        plt.text(shape, scale, f' {category}', fontsize=9, ha='left', va='center')
+    
+    # Draw dotted lines at 0.5 for both shape (x-axis) and scale (y-axis)
+    plt.axvline(x=0.5, color='red', linestyle=':', linewidth=1.5)
+    plt.axhline(y=0.5, color='red', linestyle=':', linewidth=1.5)
+    
+    # Label the axes and add a title
+    plt.xlabel("Shape Difference")
+    plt.ylabel("Scale Difference")
+    plt.title("Shape vs. Scale Differences by Category")
+    plt.grid(True)
+    
+    # Ensure the x- and y-axes always start at 0.
+    ax = plt.gca()
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+    
+    # Save the figure if a save path is provided; otherwise, show it.
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+
+
+def plot_shape_vs_scale_knn(parquet_file_path, save_path=None, n_neighbors=3):
+    """
+    Reads a parquet file containing columns:
+    'category', 'scale_difference', 'shape_difference', and 'classification'.
+    
+    It then:
+      - Encodes the classification labels to numeric values.
+      - Trains a KNN classifier (default n_neighbors=3) using shape_difference and scale_difference as features.
+      - Computes predicted classifications on a grid over the feature space.
+      - Plots the decision boundaries as a contour fill.
+      - Overlays a scatter plot of the data, labeling each point with its category name.
+      - Draws vertical and horizontal dotted lines at 0.5.
+      - Sets both x- and y-axes to start at 0 and end at the largest observed values (or 0.5 if larger values aren't present).
+      
+    Parameters:
+      parquet_file_path (str): Path to the parquet file.
+      save_path (str, optional): If provided, the plot will be saved to this path.
+      n_neighbors (int, optional): Number of neighbors to use for KNN.
+    """
+    # Read the parquet file
+    df = pd.read_parquet(parquet_file_path)
+    
+    # Prepare features and target for KNN
+    X = df[['shape_difference', 'scale_difference']].values
+    y = df['classification'].values
+    
+    # Encode classification labels to numeric values
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+    
+    # Create and train the KNN classifier on the encoded labels
+    knn = KNeighborsClassifier(n_neighbors=n_neighbors)
+    knn.fit(X, y_encoded)
+    
+    # Determine axis limits: at least 0.5 and up to the largest observed value
+    x_max = 1.1*max(df['shape_difference'].max(), 0.5)
+    y_max = 1.1*max(df['scale_difference'].max(), 0.5)
+    
+    # Define the grid for plotting decision boundaries using these limits
+    xx, yy = np.meshgrid(np.linspace(0, x_max, 200),
+                         np.linspace(0, y_max, 200))
+    
+    # Predict classification for each point in the grid
+    grid_points = np.c_[xx.ravel(), yy.ravel()]
+    Z = knn.predict(grid_points)
+    Z = Z.reshape(xx.shape)
+    
+    # Create a new figure
+    plt.figure(figsize=(10, 8))
+    
+    # Plot decision boundaries (background) with a light contour fill using the numeric predictions
+    plt.contourf(xx, yy, Z, alpha=0.3, cmap=plt.cm.Paired)
+    
+    # Plot each data point and add a text label with its category.
+    for _, row in df.iterrows():
+        shape = row['shape_difference']
+        scale = row['scale_difference']
+        category = row['category']
+        plt.scatter(shape, scale, color='blue', s=50)
+        plt.text(shape, scale, f' {category}', fontsize=9, ha='left', va='center')
+    
+    # Draw dotted lines at 0.5 on both axes
+    plt.axvline(x=0.5, color='red', linestyle=':', linewidth=1.5)
+    plt.axhline(y=0.5, color='red', linestyle=':', linewidth=1.5)
+    
+    # Label axes and title the plot
+    plt.xlabel("Shape Difference")
+    plt.ylabel("Scale Difference")
+    plt.title("Shape vs. Scale Differences by Category with KNN Decision Boundaries")
+    plt.grid(True)
+    
+    # Ensure the axes always start at 0 and end at the largest observed values
+    ax = plt.gca()
+    ax.set_xlim(0, x_max)
+    ax.set_ylim(0, y_max)
+    
+    # Save the figure if a save path is provided; otherwise, display it.
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+
+
+def aggregate_metrics_by_city(metrics_path, output_path, metric, aggregation="mean"):
+    """
+    Reads all parquet files in metrics_path, where each file contains metrics for one city.
+    For each city, it extracts the specified metric (after converting the columns to datetime
+    and transposing the DataFrame so that dates become the index). Then, it aggregates the 
+    metric across all cities using the specified method (mean or median) and saves the result 
+    as a parquet file.
+
+    Parameters:
+      metrics_path (str): Directory containing city metric parquet files.
+      output_path (str): Path to save the aggregated parquet file.
+      metric (str): The metric to aggregate.
+      aggregation (str): Aggregation method ("mean" or "median"). Default is "mean".
+
+    Returns:
+      None
+    """
+    city_data = []
+    
+    print("Processing metrics for each city...")
+    for city_file in os.listdir(metrics_path):
+        if city_file.endswith(".parquet"):
+            # Extract city name from the file name.
+            city_name = os.path.splitext(city_file)[0].replace("_metrics", "")
+            city_metrics_path = os.path.join(metrics_path, city_file)
+            city_df = pd.read_parquet(city_metrics_path)
+            
+            # Convert the columns (assumed to be date strings) to datetime objects.
+            city_df.columns = pd.to_datetime(city_df.columns, format="%d/%m/%Y")
+            # Transpose so that dates become the index.
+            city_df = city_df.T
+            
+            if metric not in city_df.columns:
+                raise ValueError(
+                    f"Metric '{metric}' not found in file '{city_file}'. Available metrics: {list(city_df.columns)}"
+                )
+            
+            # Extract the metric column and rename it to the city name.
+            metric_df = city_df[[metric]].copy()
+            metric_df.rename(columns={metric: city_name}, inplace=True)
+            city_data.append(metric_df)
+    
+    if not city_data:
+        print("No city data found.")
+        return
+
+    print("Averaging metrics over all cities...")
+    # Concatenate all city dataframes along columns (aligning on dates)
+    combined_df = pd.concat(city_data, axis=1)
+    
+    # Aggregate over cities using the specified method.
+    if aggregation == "mean":
+        aggregated_series = combined_df.mean(axis=1)
+    elif aggregation == "median":
+        aggregated_series = combined_df.median(axis=1)
+    else:
+        raise ValueError(f"Unsupported aggregation method: {aggregation}")
+    
+    # Convert the resulting series into a DataFrame.
+    final_df = pd.DataFrame({metric: aggregated_series})
+    
+    # Ensure the output directory exists.
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    final_df.to_parquet(output_path)
+    
+    print(f"Aggregated metrics saved to {output_path}")
 
 
 if __name__ == "__main__":
@@ -5612,7 +6056,7 @@ if __name__ == "__main__":
         "social",
         "we",
         "family",
-        "friend",
+        # "friend",
         "cause",
         "tentat",
         "certain",
@@ -5627,6 +6071,28 @@ if __name__ == "__main__":
         "home",
         "work",
         "money"
+    ]
+
+    universal_traj_categories = [
+        "anx",
+        "cause",
+        "health",
+        "home",
+        "posemo",
+        "bio",
+        "achieve",
+        "tentat",
+        "body",
+        "certain",
+        "sad",
+        "affect",
+        "social",
+        "work",
+        "money",
+        "family",
+        "insight",
+        "motion",
+        "space"
     ]
 
     # combine_texts("../covid_data_parquet/albuquerque_submissions.parquet", 
@@ -5754,10 +6220,16 @@ if __name__ == "__main__":
     #     selected_cities=None
     # )
 
+    # for city in cities:
+    #     normalise_timeseries(f"../liwc_metrics_raw/{city}_liwc_metrics.parquet", f"../liwc_metrics_normalised/{city}_liwc_metrics.parquet")
+
+    # for city in cities:
+    #     smooth_timeseries(f"../liwc_metrics_normalised/{city}_liwc_metrics.parquet", f"../liwc_metrics_normalised_smoothed/{city}_liwc_metrics.parquet", resample_unit="D")
+
     # for category in categories:
     #     cluster_cities_with_dtw_pyclustering(
-    #         city_files_folder="../liwc_metrics_smoothed",
-    #         output_file=f"../liwc_clusters/{category}_clusters.parquet",
+    #         city_files_folder="../liwc_metrics_normalised_smoothed",
+    #         output_file=f"../liwc_clusters_normalised_smoothed/{category}_clusters.parquet",
     #         metric_name=f"LIWC Percentage for {category}",
     #         resample_unit="W",
     #         max_clusters=10,
@@ -5767,23 +6239,67 @@ if __name__ == "__main__":
 
     # for category in categories:
     #     aggregate_metrics_by_cluster(
-    #         metrics_path="../liwc_metrics",
-    #         clusters_path=f"../liwc_clusters/{category}_clusters.parquet",
-    #         output_path=f"../liwc_cluster_aggregated_metrics/aggregated_{category}.parquet",
+    #         metrics_path="../liwc_metrics_normalised_smoothed",
+    #         clusters_path=f"../liwc_clusters_normalised_smoothed/{category}_clusters.parquet",
+    #         output_path=f"../liwc_cluster_aggregated_metrics_normalised_smoothed/aggregated_{category}.parquet",
     #         metric=f"LIWC Percentage for {category}",
     #         aggregation="mean"
     #     )
-
-    for city in cities:
-        smooth_timeseries(f"../liwc_metrics/{city}_liwc_metrics.parquet", f"../liwc_metrics_smoothed/{city}_liwc_metrics.parquet", resample_unit="D")
-
 
     # plot_two_clusters_timeseries("../aggregated_cluster_metrics.parquet", "../lifespan_clusters.png")
     
     # plot_two_clusters_timeseries("../aggregated_cluster_metrics.parquet", "../lifespan_clusters.png")
 
-    for category in categories:
-        plot_clusters_timeseries(f"../liwc_cluster_aggregated_metrics/aggregated_{category}.parquet", f"Clustered Intensities of LIWC {category} Category", "Intensity", f"../liwc_cluster_graphs/{category}_clusters.png")
+    # for category in categories:
+    #     plot_clusters_timeseries(
+    #         f"../liwc_cluster_aggregated_metrics_normalised_smoothed/aggregated_{category}.parquet", 
+    #         f"Clustered Intensities of LIWC {category} Category", "Intensity", 
+    #         "2019-10-01",
+    #         "2022-12-31",
+    #         f"../liwc_cluster_graphs_normalised_smoothed/{category}_clusters.png"
+    #     )
+
+    # results_list = []
+    # max_scale = 0
+    # for category in categories:
+    #     print(category)
+    #     res = classify_dimension_trajectories(
+    #         f"../liwc_cluster_aggregated_metrics_normalised_smoothed/aggregated_{category}.parquet", 
+    #         "2020-01-01",
+    #         category=category,
+    #         end_date=None, 
+    #         scale_threshold=0.5, 
+    #         shape_threshold=0.5
+    #     )
+    #     if res['scale_difference'] > max_scale:
+    #         max_scale = res['scale_difference']
+    #     results_list.append(res)
+    # if max_scale != 0:
+    #     for res in results_list:
+    #         res['scale_difference'] /= max_scale
+    # results_df = pd.DataFrame(results_list)
+    # results_df.to_parquet("../shape_scale.parquet")
+
+    # plot_shape_vs_scale("../shape_scale.parquet", save_path="../shape_scale.png")
+    
+    plot_shape_vs_scale_knn("../shape_scale/shape_scale.parquet", "../shape_scale/shape_scale_knn3.png", 3)
+    
+    # for category in universal_traj_categories:
+    #     aggregate_metrics_by_city(
+    #         metrics_path="../liwc_metrics_normalised_smoothed", 
+    #         output_path=f"../liwc_universal_aggregated_metrics/aggregated_{category}.parquet", 
+    #         metric=f"LIWC Percentage for {category}", 
+    #         aggregation="mean"
+    #     )
+
+    # for category in universal_traj_categories:
+    #     plot_clusters_timeseries(
+    #         f"../liwc_universal_aggregated_metrics/aggregated_{category}.parquet", 
+    #         f"Intensities of LIWC {category} Category", "Intensity", 
+    #         "2019-10-01",
+    #         "2022-12-31",
+    #         f"../liwc_universal_graphs/{category}_universal.png"
+    #     )
 
     # aggregate_metrics_by_cluster(
     #     metrics_path="../metrics",
