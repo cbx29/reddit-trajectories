@@ -2784,16 +2784,22 @@ if __name__ == "__main__":
     ]
 
     metrics_dict = {
-        # "Percentage of Posts with Comments": "comments_percentage",
-        # "Raw Number of Posts": "submissions",
+        "Percentage of Posts with Comments": "comments_percentage",
+        "Raw Number of Posts": "submissions",
         "Raw Number of Comments": "comments",
-        # "Post Lifespan (Mean in hours)": "lifespan",
-        # "Average Response Time with Cutoff (Minutes)": "response",
-        # "Average Sentiment": "average_sentiment",
-        # "Positive Sentiment Count": "positive_sentiment",
-        # "Negative Sentiment Count": "negative_sentiment",
+        "Post Lifespan (Mean in hours)": "lifespan",
+        "Average Response Time with Cutoff (Minutes)": "response",
+        "Average Sentiment": "average_sentiment",
+        "Positive Sentiment Count": "positive_sentiment",
+        "Negative Sentiment Count": "negative_sentiment",
     }
 
+
+    # for city in cities:
+    #     normalise_timeseries(f"../metrics_filled/{city}_metrics.parquet", f"../metrics_filled_normalised2/{city}_metrics.parquet")
+
+    # for city in cities:
+    #     smooth_timeseries(f"../metrics_filled_normalised2/{city}_metrics.parquet", f"../metrics_filled_normalised_smoothed2/{city}_metrics.parquet", resample_unit="W")
 
     # print_parquet("../metric_clusters/comments_percentage_clusters.parquet")
 
@@ -2814,14 +2820,14 @@ if __name__ == "__main__":
     #         aggregation="mean"
     #     )
 
-    # for metric_key, metric_name in metrics_dict.items():
-    #     aggregate_metrics_by_cluster(
-    #         metrics_path="../metrics_filled_normalised_smoothed",
-    #         clusters_path=f"../metric_fns_clusters/{metric_name}_clusters.parquet",
-    #         output_path=f"../cluster_fns_aggregated_fns_metrics/aggregated_{metric_name}.parquet",
-    #         metric=metric_key,
-    #         aggregation="mean"
-    #     )
+    for metric_key, metric_name in metrics_dict.items():
+        aggregate_metrics_by_cluster(
+            metrics_path="../metrics_filled_normalised_smoothed2",
+            clusters_path=f"../metric_fns_clusters2/{metric_name}_clusters.parquet",
+            output_path=f"../cluster_fns_aggregated_fns_metrics2/aggregated_{metric_name}.parquet",
+            metric=metric_key,
+            aggregation="mean"
+        )
 
     # for metric_key, metric_name in metrics_dict.items():
     #     aggregate_metrics_by_cluster(
@@ -2838,8 +2844,3 @@ if __name__ == "__main__":
     #     fill_nulls_with_zero(input_path, output_path)
     #     print(f"Processed {city}: filled nulls and saved to {output_path}")
 
-    for city in cities:
-        normalise_timeseries(f"../metrics_filled/{city}_metrics.parquet", f"../metrics_filled_normalised2/{city}_metrics.parquet")
-
-    for city in cities:
-        smooth_timeseries(f"../metrics_filled_normalised2/{city}_metrics.parquet", f"../metrics_filled_normalised_smoothed2/{city}_metrics.parquet", resample_unit="W")
