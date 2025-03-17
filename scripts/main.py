@@ -2896,6 +2896,18 @@ def generate_graphs_for_cities(city_dict):
         #     display_plot=False
         # )
 
+        # calculate_and_plot_comment_percentage_time_window(
+        #     submissions_path,
+        #     comments_path,
+        #     precovid_submissions_path,
+        #     precovid_comments_path,
+        #     city=city_name,
+        #     resample_unit='W',
+        #     save_plot=True,
+        #     plot_path=f'../comment_percentage_graphs/{city_key}_comment_percentage.png',
+        #     display_plot=False
+        # )
+
         # --- Plot response times ---
         # calculate_and_plot_response_times_with_cutoff(
         #     submissions_path,
@@ -6282,7 +6294,7 @@ if __name__ == "__main__":
 
     # plot_shape_vs_scale("../shape_scale.parquet", save_path="../shape_scale.png")
     
-    plot_shape_vs_scale_knn("../shape_scale/shape_scale.parquet", "../shape_scale/shape_scale_knn3.png", 3)
+    # plot_shape_vs_scale_knn("../shape_scale/shape_scale.parquet", "../shape_scale/shape_scale_knn3.png", 3)
     
     # for category in universal_traj_categories:
     #     aggregate_metrics_by_city(
@@ -6326,7 +6338,7 @@ if __name__ == "__main__":
     #     n_jobs=-1
     # )
 
-    # generate_graphs_for_cities(city_dict)
+    generate_graphs_for_cities(city_dict)
 
     # remove_automoderator_data(cities, source_folder="../precovid_data_parquet", target_folder="../precovid_data_parquet_2")
 

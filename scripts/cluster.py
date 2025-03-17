@@ -188,11 +188,52 @@ def cluster_cities_with_dtw_pyclustering(
 
 if __name__ == "__main__":
 
-    cluster_cities_with_dtw_pyclustering(
-        city_files_folder="../metrics",
-        output_file="../metric_clusters/comments_clusters.parquet",
-        metric_name="Raw Number of Comments",
-        resample_unit="W",
-        max_clusters=10,
-        n_jobs=-1
-    )
+    metrics_dict = {
+        # "Percentage of Posts with Comments": "comments_percentage",
+        # "Raw Number of Posts": "submissions", 
+        # "Raw Number of Comments": "comments",
+        # "Post Lifespan (Mean in hours)": "lifespan",
+        # "Average Response Time with Cutoff (Minutes)": "response",
+        "Average Sentiment": "average_sentiment",
+        "Positive Sentiment Count": "positive_sentiment",
+        "Negative Sentiment Count": "negative_sentiment",
+    }
+
+
+    # cluster_cities_with_dtw_pyclustering(
+    #     city_files_folder="../metrics",
+    #     output_file="../metric_clusters/comments_clusters.parquet",
+    #     metric_name="Raw Number of Comments",
+    #     resample_unit="W",
+    #     max_clusters=10,
+    #     n_jobs=-1
+    # )
+
+    # cluster_cities_with_dtw_pyclustering(
+    #     city_files_folder="../metrics_filled_normalised_smoothed",
+    #     output_file="../metric_fns_clusters/comments_clusters.parquet",
+    #     metric_name="Raw Number of Comments",
+    #     resample_unit="W",
+    #     max_clusters=10,
+    #     n_jobs=-1
+    # )
+
+    # for metric_key, metric_name in metrics_dict.items():
+    #     cluster_cities_with_dtw_pyclustering(
+    #         city_files_folder="../metrics_filled_normalised_smoothed",
+    #         output_file=f"../metric_fns_clusters/{metric_name}_clusters.parquet",
+    #         metric_name=metric_key,
+    #         resample_unit="W",
+    #         max_clusters=10,
+    #         n_jobs=-1
+    #     )
+
+    for metric_key, metric_name in metrics_dict.items():
+        cluster_cities_with_dtw_pyclustering(
+            city_files_folder="../metrics",
+            output_file=f"../metric_clusters/{metric_name}_clusters.parquet",
+            metric_name=metric_key,
+            resample_unit="W",
+            max_clusters=10,
+            n_jobs=-1
+        )
