@@ -11,7 +11,7 @@ def predict_and_plot_cluster_aggregates(aggregated_data_path, output_plot_path, 
     data = pd.read_parquet(aggregated_data_path)
     data.index = pd.to_datetime(data.index)
 
-    normalise_date = pd.Timestamp("2018-01-01")
+    normalise_date = pd.Timestamp("2017-01-01")
     split_date = pd.Timestamp("2020-01-01")
 
     plt.figure(figsize=(12, 6))
@@ -26,9 +26,9 @@ def predict_and_plot_cluster_aggregates(aggregated_data_path, output_plot_path, 
 
         test_data = cluster_data[cluster_data["ds"] >= split_date]
 
-        model = Prophet(weekly_seasonality=True)
+        # model = Prophet(weekly_seasonality=True)
         
-        # model = Prophet(changepoint_prior_scale=0.5, weekly_seasonality=True)
+        model = Prophet(changepoint_prior_scale=0.5, weekly_seasonality=True)
 
         # train_data["cap"] = 1.0  # or another appropriate capacity value
         # model = Prophet(growth='logistic', weekly_seasonality=True)
@@ -277,17 +277,31 @@ if __name__ == "__main__":
     #         metric=metric_key
     #     )
 
+    # for metric_key, metric_name in metrics_dict.items():
+    #     predict_and_plot_cluster_aggregates(
+    #         aggregated_data_path=f"../cluster_fns_aggregated_fns_metrics2/aggregated_{metric_name}.parquet",
+    #         output_plot_path=f"../clustered_fns_prophet_plots_fns_metrics2/{metric_name}_cluster_forecast.png",
+    #         metric=metric_key
+    #     )
+
+    # for metric_key, metric_name in metrics_dict.items():
+    #     predict_and_plot_cluster_aggregates(
+    #         aggregated_data_path=f"../cluster_fns_aggregated_fns_metrics3_005/aggregated_{metric_name}.parquet",
+    #         output_plot_path=f"../clustered_fns_prophet_plots_fns_metrics3_005/{metric_name}_cluster_forecast.png",
+    #         metric=metric_key
+    #     )
+
     for metric_key, metric_name in metrics_dict.items():
         predict_and_plot_cluster_aggregates(
-            aggregated_data_path=f"../cluster_fns_aggregated_fns_metrics2/aggregated_{metric_name}.parquet",
-            output_plot_path=f"../clustered_fns_prophet_plots_fns_metrics2/{metric_name}_cluster_forecast.png",
+            aggregated_data_path=f"../cluster_fns_aggregated_fns_metrics4_01/aggregated_{metric_name}.parquet",
+            output_plot_path=f"../clustered_fns_prophet_plots_fns_metrics4_01/{metric_name}_cluster_forecast.png",
             metric=metric_key
         )
 
     # for metric_key, metric_name in metrics_dict.items():
     #     predict_and_plot_cluster_aggregates(
     #         aggregated_data_path=f"../cluster_aggregated_metrics/aggregated_{metric_name}.parquet",
-    #         output_plot_path=f"../clustered_prophet_plots/{metric_name}_cluster_forecast.png",
+    #         output_plot_path=f"../clustered_prophet_plots_test/{metric_name}_cluster_forecast.png",
     #         metric=metric_key
     #     )
 

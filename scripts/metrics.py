@@ -2619,8 +2619,8 @@ def normalise_timeseries(input_path, output_path):
     df.index = pd.to_datetime(df.index, format="%d/%m/%Y")
     
     baseline_start = pd.to_datetime("2016-01-01")
-    baseline_end   = pd.to_datetime("2017-12-31")
-    disaster_start = pd.to_datetime("2018-01-01")
+    baseline_end   = pd.to_datetime("2016-12-31")
+    disaster_start = pd.to_datetime("2017-01-01")
     disaster_end   = pd.to_datetime("2021-12-31")
     
     baseline_mask = (df.index >= baseline_start) & (df.index <= baseline_end)
@@ -2667,7 +2667,7 @@ def smooth_timeseries(file_path, output_path, resample_unit='W'):
     df = df.sort_index()
     print("Data range:", df.index.min(), "to", df.index.max())
     
-    df = df.loc["2018-01-01":"2021-12-31"]
+    df = df.loc["2017-01-01":"2021-12-31"]
     
     df_resampled = df.resample(resample_unit).mean().interpolate()
 
@@ -2676,7 +2676,8 @@ def smooth_timeseries(file_path, output_path, resample_unit='W'):
 
     for metric in df_resampled.columns:
         y = df_resampled[metric].values
-        smoothed = sm.nonparametric.lowess(y, x, frac=0.2)
+        # smoothed = sm.nonparametric.lowess(y, x, frac=0.2) # liwc
+        smoothed = sm.nonparametric.lowess(y, x, frac=0.1) # less aggressive test
         smoothed_y = smoothed[:, 1]
         print(f"Metric: {metric}, length of smoothed_y: {len(smoothed_y)}")
         smoothed_series[metric] = smoothed_y
@@ -2799,7 +2800,7 @@ if __name__ == "__main__":
     #     normalise_timeseries(f"../metrics_filled/{city}_metrics.parquet", f"../metrics_filled_normalised2/{city}_metrics.parquet")
 
     # for city in cities:
-    #     smooth_timeseries(f"../metrics_filled_normalised2/{city}_metrics.parquet", f"../metrics_filled_normalised_smoothed2/{city}_metrics.parquet", resample_unit="W")
+    #     smooth_timeseries(f"../metrics_filled_normalised2/{city}_metrics.parquet", f"../metrics_filled_normalised_smoothed4_01/{city}_metrics.parquet", resample_unit="W")
 
     # print_parquet("../metric_clusters/comments_percentage_clusters.parquet")
 
@@ -2820,11 +2821,20 @@ if __name__ == "__main__":
     #         aggregation="mean"
     #     )
 
+    # for metric_key, metric_name in metrics_dict.items():
+    #     aggregate_metrics_by_cluster(
+    #         metrics_path="../metrics_filled_normalised_smoothed2",
+    #         clusters_path=f"../metric_fns_clusters2/{metric_name}_clusters.parquet",
+    #         output_path=f"../cluster_fns_aggregated_fns_metrics2/aggregated_{metric_name}.parquet",
+    #         metric=metric_key,
+    #         aggregation="mean"
+    #     )
+
     for metric_key, metric_name in metrics_dict.items():
         aggregate_metrics_by_cluster(
-            metrics_path="../metrics_filled_normalised_smoothed2",
-            clusters_path=f"../metric_fns_clusters2/{metric_name}_clusters.parquet",
-            output_path=f"../cluster_fns_aggregated_fns_metrics2/aggregated_{metric_name}.parquet",
+            metrics_path="../metrics_filled_normalised_smoothed4_01",
+            clusters_path=f"../metric_fns_clusters4_01/{metric_name}_clusters.parquet",
+            output_path=f"../cluster_fns_aggregated_fns_metrics4_01/aggregated_{metric_name}.parquet",
             metric=metric_key,
             aggregation="mean"
         )

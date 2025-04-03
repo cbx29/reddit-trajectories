@@ -228,10 +228,20 @@ if __name__ == "__main__":
     #         n_jobs=-1
     #     )
 
+    # for metric_key, metric_name in metrics_dict.items():
+    #     cluster_cities_with_dtw_pyclustering(
+    #         city_files_folder="../metrics",
+    #         output_file=f"../metric_clusters2/{metric_name}_clusters.parquet",
+    #         metric_name=metric_key,
+    #         resample_unit="W",
+    #         max_clusters=10,
+    #         n_jobs=-1
+    #     )
+
     for metric_key, metric_name in metrics_dict.items():
         cluster_cities_with_dtw_pyclustering(
-            city_files_folder="../metrics",
-            output_file=f"../metric_clusters2/{metric_name}_clusters.parquet",
+            city_files_folder="../metrics_filled_normalised_smoothed4_01",
+            output_file=f"../metric_fns_clusters4_01/{metric_name}_clusters.parquet",
             metric_name=metric_key,
             resample_unit="W",
             max_clusters=10,
