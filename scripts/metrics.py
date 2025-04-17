@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from typing import Dict, Set, Optional
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import itertools
 
 
 def num_lines(file):
@@ -2691,6 +2692,302 @@ def smooth_timeseries(file_path, output_path, resample_unit='W'):
     
     return smoothed_df
 
+
+def dtw_distance(ts_a, ts_b):
+    """
+    Computes the DTW distance between two 1D time series and normalizes
+    the total cost by the length of the optimal warping path (i.e. returns
+    the average cost per step).
+    """
+    n, m = len(ts_a), len(ts_b)
+    dtw = np.full((n + 1, m + 1), np.inf)
+    dtw[0, 0] = 0
+
+    # Build the DTW cost matrix.
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = abs(ts_a[i - 1] - ts_b[j - 1])
+            dtw[i, j] = cost + min(dtw[i - 1, j],    # insertion
+                                   dtw[i, j - 1],    # deletion
+                                   dtw[i - 1, j - 1])  # match
+
+    # Backtrack to compute the length of the optimal warping path.
+    i, j = n, m
+    path_length = 0
+    while i > 0 or j > 0:
+        path_length += 1
+        if i == 0:
+            j -= 1
+        elif j == 0:
+            i -= 1
+        else:
+            if dtw[i - 1, j - 1] <= dtw[i - 1, j] and dtw[i - 1, j - 1] <= dtw[i, j - 1]:
+                i -= 1
+                j -= 1
+            elif dtw[i - 1, j] <= dtw[i, j - 1]:
+                i -= 1
+            else:
+                j -= 1
+
+    return dtw[n, m] / path_length
+
+
+def classify_dimension_trajectories(parquet_file_path, start_date, category, end_date=None, 
+                                    scale_threshold=0.5, shape_threshold=0.5):
+    """
+    For a given dimension represented by multiple clusters (columns in the parquet file),
+    this function computes:
+    
+    1. Characteristic Scale:
+       For each cluster, defined as the root-mean-square (RMS) magnitude of its average trajectory.
+       The pairwise scale difference is the absolute difference between the RMS values of two clusters.
+    
+    2. Shape Difference:
+       Each cluster's average trajectory is normalized by dividing by its largest absolute magnitude
+       (so that its maximum magnitude becomes 1). The pairwise shape difference is then estimated as 
+       the DTW distance between these normalized trajectories.
+    
+    The function computes these differences for all pairs of clusters and averages the results.
+    If both the average scale difference and average shape difference fall below their respective
+    thresholds (default: 0.5), the dimension is classified as having similar (or "universal") trajectories.
+    
+    Parameters:
+      parquet_file_path (str): Path to the parquet file.
+      start_date (str): Start date in a format parseable by pd.to_datetime.
+      end_date (str, optional): End date filter.
+      scale_threshold (float): Threshold for the average scale difference.
+      shape_threshold (float): Threshold for the average shape difference.
+    
+    Returns:
+      dict: Contains the averaged 'scale_difference', 'shape_difference', and 
+            'classification' (either 'universal' or 'distinct').
+    """
+    df = pd.read_parquet(parquet_file_path)
+    
+    if '_index_level_0' in df.columns:
+        df = df.set_index('_index_level_0')
+    
+    df.index = pd.to_datetime(df.index, format="%d/%m/%Y")
+    
+    df = df[df.index >= pd.to_datetime(start_date)]
+    if end_date is not None:
+        df = df[df.index <= pd.to_datetime(end_date)]
+    
+    clusters = df.columns.tolist()
+    if len(clusters) < 2:
+        raise ValueError("The data must contain at least two clusters for comparison.")
+    
+    scales = {}
+    norm_trajectories = {}
+    for col in clusters:
+        traj = df[col].values
+        rms = np.sqrt(np.mean(traj ** 2))
+        scales[col] = rms
+        max_abs = np.max(np.abs(traj))
+        norm_trajectories[col] = traj if max_abs == 0 else traj / max_abs
+    
+    scale_diffs = []
+    shape_diffs = []
+    for col_a, col_b in itertools.combinations(clusters, 2):
+        scale_diff_pair = abs(scales[col_a] - scales[col_b])
+        shape_diff_pair = dtw_distance(norm_trajectories[col_a], norm_trajectories[col_b])
+        scale_diffs.append(scale_diff_pair)
+        shape_diffs.append(shape_diff_pair)
+    
+    avg_scale_diff = np.mean(scale_diffs)
+    avg_shape_diff = np.mean(shape_diffs)
+    
+    classification = "universal" if (avg_scale_diff < scale_threshold and avg_shape_diff < shape_threshold) else "distinct"
+    
+    print("Characteristic Scales:")
+    for col in clusters:
+        print(f"  Cluster '{col}': RMS = {scales[col]:.3f}")
+    print(f"\nAverage Scale Difference: {avg_scale_diff:.3f}")
+    print(f"Average Shape Difference: {avg_shape_diff:.3f}")
+    print(f"Trajectory Classification: {classification}")
+    
+    return {
+        "category": category,
+        "scale_difference": avg_scale_diff,
+        "shape_difference": avg_shape_diff,
+        "classification": classification
+    }
+
+
+def load_city_data(file_path, metric, resample_unit, from_date, to_date):
+    """
+    Loads a city's metrics parquet file, extracts datetime values from column headings, 
+    and converts it to a resampled and interpolated time series for the chosen metric only.
+    """
+    df = pd.read_parquet(file_path)
+    
+    try:
+        df.columns = pd.to_datetime(df.columns, format="%d/%m/%Y")
+    except Exception as e:
+        raise ValueError(f"Error converting column headers to datetime in {file_path}: {e}")
+    
+    df = df.T
+    df.index.name = "datetime"
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    print("Data date range:", df.index.min(), "to", df.index.max())
+    
+    df = df.loc[from_date:to_date]
+
+    if metric not in df.columns:
+        raise ValueError(
+            f"Metric '{metric}' not found in file columns. Available metrics: {list(df.columns)}"
+        )
+    
+    df = df[[metric]]
+    df = df.resample(resample_unit).mean().interpolate()
+    return df.squeeze()
+
+
+def city_summary_statistics(metric_file, posts_file, comments_file, resample_unit='W'):
+    """
+    Computes summary statistics using precomputed metrics and raw Parquet files.
+
+    This function:
+      - Loads precomputed comment counts for the periods "2016-01-01" to "2019-12-31"
+        (pre-COVID) and "2020-01-01" to "2021-12-31" using the metric "Raw Number of Comments".
+      - Loads precomputed post counts for the same date ranges using the metric "Raw Number of Posts".
+      - Computes total counts by summing the pre-COVID and main period values.
+      - Reads the raw posts and comments files to extract the 'author' field and calculates
+        the number of unique authors present in both datasets.
+      
+    Parameters:
+        metric_file (str): Path to the metrics Parquet file containing precomputed counts.
+        posts_file (str): Path to the raw posts (submissions) Parquet file.
+        comments_file (str): Path to the raw comments Parquet file.
+        resample_unit (str, optional): Pandas resample frequency used by load_city_data (default is 'W').
+
+    Returns:
+        dict: A dictionary containing:
+              - 'n_submissions': Total number of posts from the metrics.
+              - 'n_comments': Total number of comments from the metrics.
+              - 'n_unique_authors': Number of unique author names found across posts and comments.
+    """
+    print("Loading pre-COVID comment count data...")
+    precovid_comment_counts = load_city_data(metric_file, "Raw Number of Comments", resample_unit, "2016-01-01", "2019-12-31")
+
+    print("Loading main comment count data...")
+    main_comment_counts = load_city_data(metric_file, "Raw Number of Comments", resample_unit, "2020-01-01", "2021-12-31")
+
+    print("Loading pre-COVID posts count data...")
+    precovid_post_counts = load_city_data(metric_file, "Raw Number of Posts", resample_unit, "2016-01-01", "2019-12-31")
+
+    print("Loading main posts count data...")
+    main_post_counts = load_city_data(metric_file, "Raw Number of Posts", resample_unit, "2020-01-01", "2021-12-31")
+
+    total_comments = precovid_comment_counts.sum() + main_comment_counts.sum()
+    total_posts = precovid_post_counts.sum() + main_post_counts.sum()
+
+    df_posts = pd.read_parquet(posts_file)
+    if 'author' not in df_posts.columns:
+        raise ValueError("The 'author' field is not present in the posts Parquet file.")
+    posts_unique_authors = df_posts['author']
+
+    df_comments = pd.read_parquet(comments_file)
+    if 'author' not in df_comments.columns:
+        raise ValueError("The 'author' field is not present in the comments Parquet file.")
+    comments_authors = df_comments['author']
+
+    combined_authors = pd.concat([posts_unique_authors, comments_authors], ignore_index=True)
+    unique_authors = set(combined_authors.dropna().unique())
+    n_unique_authors = len(unique_authors)
+
+    return {
+        'n_submissions': total_posts,
+        'n_comments': total_comments,
+        'covid_submissions': main_post_counts.sum(),
+        'covid_comments': main_comment_counts.sum(),
+        'pre_covid_submissions': precovid_post_counts.sum(),
+        'pre_covid_comments': precovid_comment_counts.sum(),
+        'n_unique_authors': n_unique_authors,
+        'unique_authors_set': unique_authors
+    }
+
+
+def total_summary_stats(cities, output_csv_path='city_summary_stats.csv'):
+    total_submissions = 0
+    total_comments = 0
+    total_covid_comments = 0
+    total_covid_submissions = 0
+    total_pre_covid_submissions = 0
+    total_pre_covid_comments = 0
+    all_unique_authors = set()
+    
+    city_stats = {}
+    
+    for city in cities:
+        metric_parquet_path = f"../metrics/{city}_metrics.parquet"
+        prophet_train_submissions_path = f"../prophet_train_parquet/{city}_submissions.parquet"
+        prophet_train_comments_path = f"../prophet_train_parquet/{city}_comments.parquet"
+
+        summary_stats = city_summary_statistics(metric_parquet_path, 
+                                                prophet_train_submissions_path, 
+                                                prophet_train_comments_path)
+        city_stats[city] = summary_stats
+        
+        total_submissions += summary_stats['n_submissions']
+        total_comments += summary_stats['n_comments']
+        total_covid_comments += summary_stats['covid_comments']
+        total_covid_submissions += summary_stats['covid_submissions']
+        total_pre_covid_submissions += summary_stats['pre_covid_submissions']
+        total_pre_covid_comments += summary_stats['pre_covid_comments']
+        all_unique_authors = all_unique_authors.union(summary_stats['unique_authors_set'])
+    
+    print("Overall Totals:")
+    print("Total Submissions:", total_submissions)
+    print("Total Comments:", total_comments)
+    print("Total COVID Submissions:", total_covid_submissions)
+    print("Total COVID Comments:", total_covid_comments)
+    print("Total Pre-COVID Submissions:", total_pre_covid_submissions)
+    print("Total Pre-COVID Comments:", total_pre_covid_comments)
+    print("Total Unique Authors:", len(all_unique_authors))
+    
+    city_summary_list = []
+    for city, stats in city_stats.items():
+        city_summary = {
+            'city': city,
+            'n_submissions': stats['n_submissions'],
+            'n_comments': stats['n_comments'],
+            'covid_submissions': stats['covid_submissions'],
+            'covid_comments': stats['covid_comments'],
+            'pre_covid_submissions': stats['pre_covid_submissions'],
+            'pre_covid_comments': stats['pre_covid_comments'],
+            'n_unique_authors': len(stats['unique_authors_set'])
+        }
+        city_summary_list.append(city_summary)
+    
+    df_city_summary = pd.DataFrame(city_summary_list)
+    df_city_summary.to_csv(output_csv_path, index=False)
+    print(f"City-level summary statistics saved to {output_csv_path}")
+
+
+def print_clusters(file_path, city_dict):
+    df = pd.read_parquet(file_path)
+    
+    pd.set_option("display.max_rows", None)
+    pd.set_option("display.max_columns", None)
+    pd.set_option("display.max_colwidth", None)
+    pd.set_option("display.expand_frame_repr", False)
+
+    for cluster in sorted(df["Cluster"].unique()):
+        city_keys = df[df["Cluster"] == cluster]["City"].tolist()
+        capitalised_cities = [city_dict.get(city, city) for city in city_keys]
+        capitalised_cities.sort()
+        
+        print(f"\n### Cluster {cluster} Cities ({len(capitalised_cities)} total):")
+        print(", ".join(capitalised_cities))
+
+    pd.reset_option("display.max_rows")
+    pd.reset_option("display.max_columns")
+    pd.reset_option("display.max_colwidth")
+    pd.reset_option("display.expand_frame_repr")
+
 if __name__ == "__main__":
 
     cities = [
@@ -2784,6 +3081,94 @@ if __name__ == "__main__":
         "winstonsalem"
     ]
 
+    city_dict = {
+        "albuquerque": "Albuquerque",
+        "anchorage": "Anchorage",
+        "arlington": "Arlington",
+        "atlanta": "Atlanta",
+        "aurora": "Aurora",
+        "austin": "Austin",
+        "bakersfield": "Bakersfield",
+        "baltimore": "Baltimore",
+        "batonrouge": "Baton Rouge",
+        "boise": "Boise",
+        "boston": "Boston",
+        "buffalo": "Buffalo",
+        "charlotte": "Charlotte",
+        "chicago": "Chicago",
+        "cincinnati": "Cincinnati",
+        "cleveland": "Cleveland",
+        "coloradosprings": "Colorado Springs",
+        "columbus": "Columbus",
+        "corpuschristi": "Corpus Christi",
+        "dallas": "Dallas",
+        "denver": "Denver",
+        "detroit": "Detroit",
+        "elpaso": "El Paso",
+        "fortwayne": "Fort Wayne",
+        "fortworth": "Fort Worth",
+        "fremont": "Fremont",
+        "fresno": "Fresno",
+        "glendale": "Glendale",
+        "honolulu": "Honolulu",
+        "houston": "Houston",
+        "indianapolis": "Indianapolis",
+        "irvine": "Irvine",
+        "jacksonville": "Jacksonville",
+        "jerseycity": "Jersey City",
+        "kansascity": "Kansas City",
+        "laredo": "Laredo",
+        "lasvegas": "Las Vegas",
+        "lexington": "Lexington",
+        "lincoln": "Lincoln",
+        "longbeach": "Long Beach",
+        "losangeles": "Los Angeles",
+        "louisville": "Louisville",
+        "lubbock": "Lubbock",
+        "madison": "Madison",
+        "memphis": "Memphis",
+        "miami": "Miami",
+        "milwaukee": "Milwaukee",
+        "minneapolis": "Minneapolis",
+        "nashville": "Nashville",
+        "newark": "Newark",
+        "neworleans": "New Orleans",
+        "norfolk": "Norfolk",
+        "newyorkcity": "New York City",
+        "oakland": "Oakland",
+        "oklahomacity": "Oklahoma City",
+        "omaha": "Omaha",
+        "orlando": "Orlando",
+        "philadelphia": "Philadelphia",
+        "pittsburgh": "Pittsburgh",
+        "plano": "Plano",
+        "portland": "Portland",
+        "reno": "Reno",
+        "richmond": "Richmond",
+        "riverside": "Riverside",
+        "sacramento": "Sacramento",
+        "saintpaul": "Saint Paul",
+        "sanantonio": "San Antonio",
+        "sandiego": "San Diego",
+        "sanfrancisco": "San Francisco",
+        "sanjose": "San Jose",
+        "santaclarita": "Santa Clarita",
+        "scottsdale": "Scottsdale",
+        "seattle": "Seattle",
+        "spokane": "Spokane",
+        "stlouis": "St. Louis",
+        "stockton": "Stockton",
+        "stpetersburg": "St. Petersburg",
+        "tampa": "Tampa",
+        "toledo": "Toledo",
+        "tucson": "Tucson",
+        "tulsa": "Tulsa",
+        "virginiabeach": "Virginia Beach",
+        "washingtondc": "Washington DC",
+        "wichita": "Wichita",
+        "winstonsalem": "Winston Salem"
+    }
+
     metrics_dict = {
         "Percentage of Posts with Comments": "comments_percentage",
         "Raw Number of Posts": "submissions",
@@ -2795,6 +3180,7 @@ if __name__ == "__main__":
         "Negative Sentiment Count": "negative_sentiment",
     }
 
+    # total_summary_stats(cities)
 
     # for city in cities:
     #     normalise_timeseries(f"../metrics_filled/{city}_metrics.parquet", f"../metrics_filled_normalised2/{city}_metrics.parquet")
@@ -2802,7 +3188,7 @@ if __name__ == "__main__":
     # for city in cities:
     #     smooth_timeseries(f"../metrics_filled_normalised2/{city}_metrics.parquet", f"../metrics_filled_normalised_smoothed4_01/{city}_metrics.parquet", resample_unit="W")
 
-    # print_parquet("../metric_clusters/comments_percentage_clusters.parquet")
+    print_clusters("../metric_fns_clusters4_01/negative_sentiment_clusters.parquet", city_dict)
 
     # aggregate_metrics_by_cluster(
     #     metrics_path="../metrics",
@@ -2830,14 +3216,14 @@ if __name__ == "__main__":
     #         aggregation="mean"
     #     )
 
-    for metric_key, metric_name in metrics_dict.items():
-        aggregate_metrics_by_cluster(
-            metrics_path="../metrics_filled_normalised_smoothed4_01",
-            clusters_path=f"../metric_fns_clusters4_01/{metric_name}_clusters.parquet",
-            output_path=f"../cluster_fns_aggregated_fns_metrics4_01/aggregated_{metric_name}.parquet",
-            metric=metric_key,
-            aggregation="mean"
-        )
+    # for metric_key, metric_name in metrics_dict.items():
+    #     aggregate_metrics_by_cluster(
+    #         metrics_path="../metrics_filled_normalised_smoothed4_01",
+    #         clusters_path=f"../metric_fns_clusters4_01/{metric_name}_clusters.parquet",
+    #         output_path=f"../cluster_fns_aggregated_fns_metrics4_01/aggregated_{metric_name}.parquet",
+    #         metric=metric_key,
+    #         aggregation="mean"
+    #     )
 
     # for metric_key, metric_name in metrics_dict.items():
     #     aggregate_metrics_by_cluster(
@@ -2854,3 +3240,23 @@ if __name__ == "__main__":
     #     fill_nulls_with_zero(input_path, output_path)
     #     print(f"Processed {city}: filled nulls and saved to {output_path}")
 
+    # results_list = []
+    # max_scale = 0
+    # for metric_name, metric_code in metrics_dict.items():
+    #     print(metric_name)
+    #     res = classify_dimension_trajectories(
+    #         f"../cluster_fns_aggregated_fns_metrics4_01/aggregated_{metric_code}.parquet", 
+    #         "2020-01-01",
+    #         category=metric_name,
+    #         end_date=None, 
+    #         scale_threshold=0.5, 
+    #         shape_threshold=0.5
+    #     )
+    #     if res['scale_difference'] > max_scale:
+    #         max_scale = res['scale_difference']
+    #     results_list.append(res)
+    # if max_scale != 0:
+    #     for res in results_list:
+    #         res['scale_difference'] /= max_scale
+    # results_df = pd.DataFrame(results_list)
+    # results_df.to_parquet("../structural_metrics_shape_scale.parquet")

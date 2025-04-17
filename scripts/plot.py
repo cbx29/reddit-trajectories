@@ -7,6 +7,16 @@ import json
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut
+from time import sleep
+from adjustText import adjust_text
+import matplotlib.dates as mdates
+from shapely.geometry import Point
+import geopandas as gpd
+from time import sleep
 
 
 def plot_entries_per_week(json_file, output_dir, dataset_type):
@@ -1393,20 +1403,6 @@ def generate_graphs_for_cities(city_dict):
         #     display_plot=False
         # )
 
-        # plot_liwc_waterfall(
-        #     liwc_metric_parquet_path,
-        #     component="LIWC Percentage for affect",
-        #     city=city_name,
-        #     resample_unit='W',
-        #     baseline_start='2019-10-01',
-        #     baseline_end='2019-12-31',
-        #     main_start='2020-01-01',
-        #     main_end='2021-12-31',
-        #     save_plot=True,
-        #     plot_path=f'{output_dir}/{city_key}_liwc_waterfall.png',
-        #     display_plot=False
-        # )
-
         # plot_comment_percentage_time_window_normalised(
         #     metric_normalised_parquet_path,
         #     city=city_name,
@@ -1417,6 +1413,96 @@ def generate_graphs_for_cities(city_dict):
         #     display_plot=False
         # )
 
+        plot_post_count(
+            metric_parquet_path,
+            city=city_name, 
+            resample_unit='W', 
+            metric="Raw Number of Posts",
+            save_plot=True, 
+            plot_path=f'../report_graphs/post_count/{city_key}_post_count_timeseries.png', 
+            display_plot=False
+        )
+
+        plot_comment_count(
+            metric_parquet_path,
+            city=city_name, 
+            resample_unit='W', 
+            metric="Raw Number of Comments",
+            save_plot=True, 
+            plot_path=f'../report_graphs/comment_count/{city_key}_comment_count_timeseries.png', 
+            display_plot=False
+        )
+
+        plot_comment_percentage_time_window(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric="Percentage of Posts with Comments",
+            save_plot=True,
+            plot_path=f'../report_graphs/comment_percentage/{city_key}_comment_percentage_same_week.png',
+            display_plot=False
+        )
+
+        plot_response_times_with_cutoff(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric = 'Average Response Time with Cutoff (Minutes)',
+            time_diff_unit='minutes',
+            save_plot=True,
+            plot_path=f'../report_graphs/response/{city_key}_average_response_times.png',
+            display_plot=False
+        )
+
+        plot_post_lifespan_timeseries(
+            metric_parquet_path,
+            resample_unit='weekly',
+            metric='Post Lifespan (Mean in hours)',
+            units='hours',
+            statistic='mean',
+            title='Post Lifespan Over Time',
+            xlabel=None,
+            ylabel=None,
+            figsize=(14, 7),
+            return_data=False,
+            log_scale=False,
+            verbose=False,
+            save_plot=True,
+            plot_path=f'../report_graphs/lifespan/{city_key}_post_lifespan_timeseries.png',
+            display_plot=False
+        )
+
+        plot_post_sentiment(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric='Average Sentiment',
+            save_plot=True,
+            plot_path=f'../report_graphs/average_sentiment//{city_key}_post_sentiment.png',
+            display_plot=False
+        )
+
+        plot_positive_sentiment_count(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric='Positive Sentiment Count',
+            threshold=0.05,
+            save_plot=True,
+            plot_path=f'../report_graphs/positive_sentiment/{city_key}_positive_sentiment_count.png',
+            display_plot=False
+        )
+
+        plot_negative_sentiment_count(
+            metric_parquet_path,
+            city=city_name,
+            resample_unit='W',
+            metric='Negative Sentiment Count',
+            threshold=-0.05,
+            save_plot=True,
+            plot_path=f'../report_graphs/negative_sentiment/{city_key}_negative_sentiment_count.png',
+            display_plot=False
+        )
 
         print(f"Graphs for {city_name} saved in the '{output_dir}' folder.")
 
@@ -1445,7 +1531,7 @@ def plot_two_clusters_timeseries(parquet_file_path, save_path=None):
     plt.show()
 
 
-def plot_clusters_timeseries(parquet_file_path, title, yaxis, start_date, end_date=None, save_path=None):
+def plot_liwc_clusters_timeseries(parquet_file_path, title, yaxis, start_date, end_date=None, save_path=None):
     df = pd.read_parquet(parquet_file_path)
 
     if '_index_level_0' in df.columns:
@@ -1464,18 +1550,31 @@ def plot_clusters_timeseries(parquet_file_path, title, yaxis, start_date, end_da
     
     covid_date = pd.to_datetime("01/01/2020", format="%d/%m/%Y")
     plt.axvline(x=covid_date, color='red', linestyle=':', linewidth=1.5, label='COVID-19 Start')
-
     plt.axhline(y=0, color='black', linestyle=':', linewidth=1.5, label='Zero Line')
+    
+    plt.title(title, fontsize=30)
+    plt.xlabel('Time', fontsize=25)
+    plt.ylabel(yaxis, fontsize=25)
 
-    plt.title(title)
-    plt.xlabel('Time')
-    plt.ylabel(yaxis)
-    plt.legend()
-    plt.grid(True)
+    handles, labels = plt.gca().get_legend_handles_labels()
+    new_labels = [label.replace("LIWC Percentage for ", "") for label in labels]
+    plt.legend(handles, new_labels, fontsize=20)
+    
+    ax = plt.gca()
+    ax.tick_params(axis='both', which='major', labelsize=20)
+    ax.grid(True)
+    
+    locator = mdates.AutoDateLocator()
+    formatter = mdates.ConciseDateFormatter(locator)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+    plt.gcf().autofmt_xdate()
 
     if save_path:
         plt.savefig(save_path, bbox_inches='tight')
         print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
 
 
 def plot_shape_vs_scale(parquet_file_path, save_path=None):
@@ -1534,6 +1633,7 @@ def plot_shape_vs_scale_knn(parquet_file_path, save_path=None, n_neighbors=3):
       - Computes predicted classifications on a grid over the feature space.
       - Plots the decision boundaries as a contour fill.
       - Overlays a scatter plot of the data, labeling each point with its category name.
+      - Adjusts text positions to avoid overlaps.
       - Draws vertical and horizontal dotted lines at 0.5.
       - Sets both x- and y-axes to start at 0 and end at the largest observed values (or 0.5 if larger values aren't present).
       
@@ -1542,6 +1642,7 @@ def plot_shape_vs_scale_knn(parquet_file_path, save_path=None, n_neighbors=3):
       save_path (str, optional): If provided, the plot will be saved to this path.
       n_neighbors (int, optional): Number of neighbors to use for KNN.
     """
+
     df = pd.read_parquet(parquet_file_path)
     
     X = df[['shape_difference', 'scale_difference']].values
@@ -1553,12 +1654,12 @@ def plot_shape_vs_scale_knn(parquet_file_path, save_path=None, n_neighbors=3):
     knn = KNeighborsClassifier(n_neighbors=n_neighbors)
     knn.fit(X, y_encoded)
     
-    x_max = 1.1*max(df['shape_difference'].max(), 0.5)
-    y_max = 1.1*max(df['scale_difference'].max(), 0.5)
+    x_max = 1.1 * max(df['shape_difference'].max(), 0.5)
+    y_max = 1.1 * max(df['scale_difference'].max(), 0.5)
 
     xx, yy = np.meshgrid(np.linspace(0, x_max, 200),
                          np.linspace(0, y_max, 200))
-
+    
     grid_points = np.c_[xx.ravel(), yy.ravel()]
     Z = knn.predict(grid_points)
     Z = Z.reshape(xx.shape)
@@ -1566,23 +1667,28 @@ def plot_shape_vs_scale_knn(parquet_file_path, save_path=None, n_neighbors=3):
     plt.figure(figsize=(10, 8))
     
     plt.contourf(xx, yy, Z, alpha=0.3, cmap=plt.cm.Paired)
-    
+
+    texts = []
     for _, row in df.iterrows():
         shape = row['shape_difference']
         scale = row['scale_difference']
         category = row['category']
         plt.scatter(shape, scale, color='blue', s=50)
-        plt.text(shape, scale, f' {category}', fontsize=9, ha='left', va='center')
+        t = plt.text(shape, scale, f' {category}', fontsize=12, ha='left', va='center')
+        texts.append(t)
+
+    adjust_text(texts, arrowprops=dict(arrowstyle="->", color='black', lw=1), force_text=0.5)
     
     plt.axvline(x=0.5, color='red', linestyle=':', linewidth=1.5)
     plt.axhline(y=0.5, color='red', linestyle=':', linewidth=1.5)
     
-    plt.xlabel("Shape Difference")
-    plt.ylabel("Scale Difference")
-    plt.title("Shape vs. Scale Differences by Category with KNN Decision Boundaries")
+    plt.xlabel("Shape Difference", fontsize=16)
+    plt.ylabel("Scale Difference", fontsize=16)
+    plt.title("Shape vs. Scale Differences by Category with KNN Decision Boundaries", fontsize=18)
     plt.grid(True)
     
     ax = plt.gca()
+    ax.tick_params(axis='both', which='major', labelsize=14)
     ax.set_xlim(0, x_max)
     ax.set_ylim(0, y_max)
     
@@ -1596,7 +1702,8 @@ def plot_shape_vs_scale_knn(parquet_file_path, save_path=None, n_neighbors=3):
 def plot_word_shifts_from_parquet(filepath, category, top_n=50, save=False, filename='word_shifts.png'):
     """
     Reads a Parquet file (with 'words' and 'percentage_change' columns) 
-    and produces a horizontal bar chart of the top word shifts.
+    and produces a horizontal bar chart of the top word shifts, sorted in descending order
+    by the absolute value of percentage_change.
 
     Parameters
     ----------
@@ -1609,12 +1716,12 @@ def plot_word_shifts_from_parquet(filepath, category, top_n=50, save=False, file
     filename : str
         The file path to save the figure when save=True.
     """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
     df = pd.read_parquet(filepath)
 
-    df_sorted = df.reindex(df['percentage_change'].abs().sort_values(ascending=False).index)
-    df_top = df_sorted.head(top_n)
-
-    df_top = df_top.sort_values('percentage_change')
+    df_top = df.sort_values('percentage_change', key=lambda x: x.abs(), ascending=False).head(top_n)
 
     colors = df_top['percentage_change'].apply(lambda x: 'darkorange' if x > 0 else 'purple')
 
@@ -1622,19 +1729,173 @@ def plot_word_shifts_from_parquet(filepath, category, top_n=50, save=False, file
 
     ax.barh(df_top['words'], df_top['percentage_change'], color=colors)
 
+    ax.invert_yaxis()
+
     ax.axvline(x=0, color='black', linewidth=1)
 
-    ax.set_xlabel('Score shift (Δp, %)')
-    ax.set_ylabel('')
-    ax.set_title(f'Top {top_n} {category} Word Shifts')
+    ax.set_xlabel('Score shift (Δp, %)', fontsize=20)
+    ax.set_ylabel('', fontsize=20)
+    ax.set_title(f'Top {top_n} {category} Word Shifts', fontsize=25)
+
+    ax.tick_params(axis='both', which='major', labelsize=14)
 
     plt.tight_layout()
 
     if save:
         plt.savefig(filename, dpi=300)
         plt.close()
+        print(f"Plot saved to {filename}")
     else:
         plt.show()
+
+
+def plot_us_cities_map_cartopy(
+    city_dict,
+    title="Final 85 Selected U.S. Cities for Subreddit Study",
+    annotate=False,
+    save_path="../us_city_map.png",
+    marker_size=30,
+    marker_color="red",
+    sleep_time=1
+):
+    """
+    Plots a static U.S. map with cities from city_dict using Cartopy and saves it as an image.
+
+    Parameters:
+        city_dict (dict): Mapping from city keys to full city names (e.g., "newyorkcity": "New York City").
+        title (str): Title of the map.
+        annotate (bool): Whether to annotate city names.
+        save_path (str): File path to save the output image (e.g., "map.png").
+        marker_size (int): Size of the city markers.
+        marker_color (str): Color of the city markers.
+        sleep_time (int): Seconds to wait between geocoding requests.
+    """
+    geolocator = Nominatim(user_agent="city_mapper")
+    cities = []
+
+    print("Geocoding cities...")
+    for key, name in city_dict.items():
+        try:
+            location = geolocator.geocode(f"{name}, USA")
+            if location:
+                cities.append({
+                    "CityKey": key,
+                    "CityName": name,
+                    "Latitude": location.latitude,
+                    "Longitude": location.longitude
+                })
+            else:
+                print(f"Could not locate: {name}")
+        except GeocoderTimedOut:
+            print(f"Timed out: {name}")
+        except Exception as e:
+            print(f"Error with {name}: {e}")
+        sleep(sleep_time)
+
+    df = pd.DataFrame(cities)
+
+    fig = plt.figure(figsize=(14, 10))
+    ax = plt.axes(projection=ccrs.AlbersEqualArea(central_longitude=-96, central_latitude=39))
+    ax.set_extent([-130, -65, 23, 50], crs=ccrs.Geodetic())
+
+    ax.add_feature(cfeature.LAND, facecolor='lightgray')
+    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+    ax.add_feature(cfeature.STATES, linewidth=0.4)
+    ax.coastlines(resolution='50m', linewidth=0.5)
+
+    ax.scatter(
+        df["Longitude"],
+        df["Latitude"],
+        color=marker_color,
+        s=marker_size,
+        alpha=0.8,
+        transform=ccrs.Geodetic(),
+        label="Selected Cities"
+    )
+
+    if annotate:
+        for _, row in df.iterrows():
+            ax.text(
+                row["Longitude"],
+                row["Latitude"],
+                row["CityName"],
+                transform=ccrs.Geodetic(),
+                fontsize=6,
+                ha='left',
+                va='center'
+            )
+
+    plt.title(title, fontsize=16)
+    plt.tight_layout()
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=300)
+    print(f"✅ Map saved to: {save_path}")
+    plt.close()
+
+
+def plot_us_cities_map_from_dict(
+    city_dict,
+    title="Selected U.S. Cities Used in the Study",
+    annotate=False,
+    save_path=None,
+    marker_color="red",
+    marker_size=30,
+    sleep_time=1
+):
+    """
+    Plots a U.S. map with cities from a city_dict marked as dots.
+
+    Parameters:
+        city_dict (dict): Dictionary mapping city keys (e.g., "newyorkcity") to full names (e.g., "New York City").
+        title (str): Title of the plot.
+        annotate (bool): Whether to annotate city names on the map.
+        save_path (str): Optional file path to save the plot (e.g., "us_map.png").
+        marker_color (str): Color of city markers.
+        marker_size (int): Size of city markers.
+        sleep_time (int): Delay between geocoding requests (to avoid rate limiting).
+    """
+
+    geolocator = Nominatim(user_agent="city_mapper")
+    city_coords = []
+
+    print("Geocoding cities...")
+    for key, city in city_dict.items():
+        try:
+            location = geolocator.geocode(f"{city}, USA")
+            if location:
+                city_coords.append((key, city, location.latitude, location.longitude))
+            else:
+                print(f"Could not locate: {city}")
+        except Exception as e:
+            print(f"Error with city {city}: {e}")
+        sleep(sleep_time)
+
+    df = pd.DataFrame(city_coords, columns=["CityKey", "CityName", "Latitude", "Longitude"])
+    df["geometry"] = df.apply(lambda row: Point(row["Longitude"], row["Latitude"]), axis=1)
+    gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+
+    usa = gpd.read_file("../ne_110m_admin_0_countries/ne_110m_admin_0_countries.shp")
+    usa = usa[usa["ADMIN"] == "United States of America"]
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    usa.plot(ax=ax, color="lightgray", edgecolor="black")
+    gdf.plot(ax=ax, color=marker_color, markersize=marker_size)
+
+    if annotate:
+        for x, y, label in zip(gdf.geometry.x, gdf.geometry.y, gdf["CityName"]):
+            ax.text(x, y, label, fontsize=6)
+
+    plt.title(title, fontsize=14)
+    plt.axis("off")
+    plt.tight_layout()
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+        print(f"Map saved to {save_path}")
+
+    plt.show()
 
 
 if __name__ == "__main__":
@@ -1727,6 +1988,35 @@ if __name__ == "__main__":
         "winstonsalem": "Winston Salem"
     }
     
+    categories = [
+        "affect",
+        "posemo",
+        "negemo",
+        "anx",
+        "anger",
+        "sad",
+        "swear",
+        "achieve",
+        "social",
+        "we",
+        "family",
+        # "friend",
+        "cause",
+        "tentat",
+        "certain",
+        "insight",
+        "health",
+        "ingest",
+        "bio",
+        "body",
+        "motion",
+        "space",
+        "time",
+        "home",
+        "work",
+        "money"
+    ]
+
     universal_traj_categories = [
         "anx",
         "health",
@@ -1747,6 +2037,25 @@ if __name__ == "__main__":
         "space"
     ]
 
+      # for category in categories:
+    
+    #     plot_liwc_clusters_timeseries(
+    #         f"../liwc_cluster_aggregated_metrics_normalised_smoothed/aggregated_{category}.parquet", 
+    #         f"Clustered Intensities of LIWC {category} Category", "Intensity", 
+    #         "2019-10-01",
+    #         "2022-12-31",
+    #         f"../liwc_cluster_graphs_normalised_smoothed_bigger_font/{category}_clusters.png"
+    #     )
+
+    # for category in universal_traj_categories:
+    #     plot_liwc_clusters_timeseries(
+    #         f"../liwc_universal_aggregated_metrics/aggregated_{category}.parquet", 
+    #         f"Intensities of LIWC {category} Category", "Intensity", 
+    #         "2019-10-01",
+    #         "2022-12-31",
+    #         f"../liwc_universal_graphs_bigger_font/{category}_universal.png"
+    #     )
+
     # for category in universal_traj_categories:
     #     print(category)
     #     plot_word_shifts_from_parquet(
@@ -1754,7 +2063,24 @@ if __name__ == "__main__":
     #         category=category,
     #         top_n=50,
     #         save=True,
-    #         filename=f'../liwc_word_shift_plots/{category}_word_shifts.png'
+    #         filename=f'../liwc_universal_word_shift_plots_bigger_font/{category}_word_shifts.png'
     #     )
     
     generate_graphs_for_cities(city_dict)
+
+    # plot_us_cities_map_cartopy(
+    #     city_dict,
+    #     annotate=False,
+    #     save_path="../us_city_map.png"
+    # )
+
+    # plot_us_cities_map_from_dict(
+    #     city_dict,
+    #     annotate=False,
+    #     save_path="../final_us_city_map.png"
+    # )
+
+    # plot_shape_vs_scale("../shape_scale.parquet", save_path="../shape_scale.png")
+    
+    # plot_shape_vs_scale_knn("../shape_scale/shape_scale.parquet", "../shape_scale_knn3.png", 3)
+    # plot_shape_vs_scale_knn("../structural_metrics_shape_scale.parquet", "../structural_metrics_shape_scale_knn3.png", 3)
