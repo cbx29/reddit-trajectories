@@ -1145,6 +1145,84 @@ def get_global_y_limits(city_dict, metric_column):
     return global_min, global_max
 
 
+def plot_city_comparison(
+    metric_file_city1,
+    metric_file_city2,
+    city1,
+    city2,
+    metric='comment_count',
+    resample_unit='W',
+    color1='blue',
+    color2='green',
+    covid_cutoff='2020-01-01',
+    save_plot=False,
+    plot_path='city_comparison_timeseries.png',
+    display_plot=True
+):
+    """
+    Overlays the same metric for two cities on one time‐series plot,
+    with an optional COVID‐start vertical line.
+
+    Parameters
+    ----------
+    metric_file_city1 : str
+        Parquet file path for city1’s metrics.
+    metric_file_city2 : str
+        Parquet file path for city2’s metrics.
+    city1 : str
+        Name of the first city (used in legend/title).
+    city2 : str
+        Name of the second city.
+    metric : str, optional
+        Column name of the metric in both files.
+    resample_unit : str, optional
+        Pandas resample frequency (default 'W' for weekly).
+    color1, color2 : str, optional
+        Plot colors for city1 & city2.
+    covid_cutoff : str or pd.Timestamp, optional
+        Date for vertical “COVID start” line.
+    save_plot : bool, optional
+        If True, saves the figure to `plot_path`.
+    plot_path : str, optional
+        File path to save the plot.
+    display_plot : bool, optional
+        If True, calls `plt.show()`, else closes it.
+
+    Returns
+    -------
+    None
+    """
+    print(f"Loading {city1} data…")
+    ts1 = load_city_data(metric_file_city1, metric, resample_unit, "2019-10-01", "2021-12-31")
+    print(f"Loading {city2} data…")
+    ts2 = load_city_data(metric_file_city2, metric, resample_unit, "2019-10-01", "2021-12-31")
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ts1.plot(ax=ax, marker='o', linestyle='-', label=city1, color=color1)
+    ts2.plot(ax=ax, marker='o', linestyle='-', label=city2, color=color2)
+
+    covid_dt = pd.to_datetime(covid_cutoff)
+    ax.axvline(covid_dt, color='red', linestyle=':', 
+               label=f'COVID Start ({covid_dt.date()})')
+    
+    ax.set_xlabel('Time')
+    ax.set_ylabel(metric.replace('_', ' ').title())
+    ax.set_title(f'{metric.replace("_", " ").title()} in {city1} vs {city2}')
+    ax.legend()
+    ax.grid(True)
+    fig.tight_layout()
+
+    if save_plot:
+        fig.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+    if display_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    print("Done.")
+
+
 def generate_graphs_for_cities(city_dict):
     """
     Generates and saves graphs for each city contained in city_dict.
@@ -1898,6 +1976,232 @@ def plot_us_cities_map_from_dict(
     plt.show()
 
 
+def plot_response_time_comparison(
+    metric_file_city1,
+    metric_file_city2,
+    city1,
+    city2,
+    resample_unit='W',
+    metric='average_response_time',
+    time_diff_unit='minutes',
+    covid_cutoff='2020-01-01',
+    save_plot=False,
+    plot_path='comparison_response_times.png',
+    display_plot=True
+):
+    """
+    Overlays average response times for two cities on the same axis,
+    including only responses within 24h, and marks the COVID start date.
+
+    Parameters
+    ----------
+    metric_file_city1 : str
+        Parquet file for city1’s metrics.
+    metric_file_city2 : str
+        Parquet file for city2’s metrics.
+    city1 : str
+        Name of the first city.
+    city2 : str
+        Name of the second city.
+    resample_unit : str, optional
+        Pandas resample frequency ('W', 'M', etc.).
+    metric : str, optional
+        Column name of the response time metric (in seconds).
+    time_diff_unit : str, optional
+        Unit to convert response time into:
+        'seconds', 'minutes', 'hours', or 'days'.
+    covid_cutoff : str or pd.Timestamp, optional
+        Date to draw vertical line (default '2020-01-01').
+    save_plot : bool, optional
+        If True, saves the plot to `plot_path`.
+    plot_path : str, optional
+        File path to save the plot.
+    display_plot : bool, optional
+        If True, calls `plt.show()`, else closes figure.
+
+    Returns
+    -------
+    None
+    """
+    def load_and_concat(fpath):
+        pre = load_city_data(fpath, metric, resample_unit, "2019-10-01", "2019-12-31")
+        main = load_city_data(fpath, metric, resample_unit, "2020-01-01", "2021-12-31")
+        return pd.concat([pre, main])
+
+    print(f"Loading response times for {city1}…")
+    ts1 = load_and_concat(metric_file_city1)
+    print(f"Loading response times for {city2}…")
+    ts2 = load_and_concat(metric_file_city2)
+
+    # Unit conversion
+    if time_diff_unit == 'seconds':
+        factor, ylabel = 1, 'Average Response Time (Seconds)'
+    elif time_diff_unit == 'minutes':
+        factor, ylabel = 1/60, 'Average Response Time (Minutes)'
+    elif time_diff_unit == 'hours':
+        factor, ylabel = 1/3600, 'Average Response Time (Hours)'
+    elif time_diff_unit == 'days':
+        factor, ylabel = 1/86400, 'Average Response Time (Days)'
+    else:
+        raise ValueError("Unsupported time_diff_unit: choose 'seconds','minutes','hours','days'")
+
+    ts1 = ts1 * factor
+    ts2 = ts2 * factor
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ts1.plot(ax=ax, marker='o', linestyle='-', label=city1, color='blue')
+    ts2.plot(ax=ax, marker='o', linestyle='-', label=city2, color='green')
+
+    covid_dt = pd.to_datetime(covid_cutoff)
+    ax.axvline(covid_dt, color='red', linestyle=':', label=f'COVID Start ({covid_dt.date()})')
+
+    ax.set_xlabel('Time')
+    ax.set_ylabel(ylabel)
+    ax.set_title(f'{ylabel} in {city1} vs {city2}')
+    ax.legend()
+    ax.grid(True)
+    fig.tight_layout()
+
+    if save_plot:
+        fig.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")
+    if display_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    print("Done.")
+
+
+def plot_post_lifespan_three_way(
+    metric_file_city1,
+    metric_file_city2,
+    metric_file_city3,
+    city1,
+    city2,
+    city3,
+    resample_unit='weekly',
+    metric='post_lifespan_seconds',
+    units='hours',
+    statistic='mean',
+    covid_cutoff='2020-01-01',
+    figsize=(14, 7),
+    log_scale=False,
+    save_plot=False,
+    plot_path='post_lifespan_three_way.png',
+    display_plot=True,
+    return_data=False,
+    verbose=False
+):
+    """
+    Overlays post lifespan stats for three cities on the same axis,
+    combining pre-COVID and main (COVID) data, with a vertical COVID start marker.
+
+    Parameters
+    ----------
+    metric_file_city1, metric_file_city2, metric_file_city3 : str
+        Parquet files for each city’s metrics.
+    city1, city2, city3 : str
+        Names of the three cities.
+    resample_unit : str, optional
+        'daily', 'weekly', 'monthly', 'yearly' or any pandas resample rule.
+    metric : str, optional
+        Column name for the lifespan metric (in seconds).
+    units : str, optional
+        One of 'seconds', 'minutes', 'hours', 'days'.
+    statistic : str, optional
+        'mean', 'median', or 'count'.
+    covid_cutoff : str or pd.Timestamp, optional
+        Date for vertical line.
+    figsize : tuple, optional
+        Figure size.
+    log_scale : bool, optional
+        If True, y-axis is log-scaled.
+    save_plot : bool, optional
+        If True, saves figure to `plot_path`.
+    plot_path : str, optional
+        Path to save the plot.
+    display_plot : bool, optional
+        If True, calls plt.show().
+    return_data : bool, optional
+        If True, returns the combined DataFrame.
+    verbose : bool, optional
+        If True, prints progress messages.
+
+    Returns
+    -------
+    pd.DataFrame or None
+    """
+    rm = {'daily':'D','weekly':'W','monthly':'M','yearly':'Y'}
+    rule = rm.get(resample_unit.lower(), resample_unit)
+
+    def load_city(fpath):
+        if verbose: print(f"Loading pre-COVID data for {fpath}…")
+        pre = load_city_data(fpath, metric, rule, "2019-10-01", "2019-12-31")
+        if verbose: print(f"Loading main data for {fpath}…")
+        main = load_city_data(fpath, metric, rule, "2020-01-01", "2021-12-31")
+        return pd.concat([pre, main])
+
+    ts1 = load_city(metric_file_city1)
+    ts2 = load_city(metric_file_city2)
+    ts3 = load_city(metric_file_city3)
+
+    if statistic in ('mean','median'):
+        conv = {'seconds':1, 'minutes':1/60, 'hours':1/3600, 'days':1/86400}
+        if units not in conv:
+            raise ValueError("Unsupported units: choose 'seconds','minutes','hours','days'")
+        factor = conv[units]
+        ts1, ts2, ts3 = ts1*factor, ts2*factor, ts3*factor
+        ylabel = f"Post Lifespan ({units})"
+    else:
+        ylabel = "Number of Posts"
+
+    fig, ax = plt.subplots(figsize=figsize)
+    if statistic in ('mean','median'):
+        ax.plot(ts1.index, ts1.values, marker='o', linestyle='-',  label=city1, color='blue')
+        ax.plot(ts2.index, ts2.values, marker='o', linestyle='-', label=city2, color='green')
+        ax.plot(ts3.index, ts3.values, marker='o', linestyle='-',  label=city3, color='orange')
+    else:
+        width = 0.8 * pd.to_timedelta(1, unit=rule)
+        ax.bar(ts1.index - width/3, ts1.values, width=width/3, label=city1, alpha=0.7)
+        ax.bar(ts2.index,            ts2.values, width=width/3, label=city2, alpha=0.7)
+        ax.bar(ts3.index + width/3, ts3.values, width=width/3, label=city3, alpha=0.7)
+
+    cv = pd.to_datetime(covid_cutoff)
+    ax.axvline(cv, color='red', linestyle=':', label=f'COVID Start ({cv.date()})')
+
+    ax.set_title(f"Post Lifespan ({statistic.capitalize()}) — {city1}, {city2} & {city3}")
+    ax.set_xlabel(f"Time ({resample_unit.capitalize()})")
+    ax.set_ylabel(ylabel)
+    if log_scale:
+        ax.set_yscale('log')
+    ax.legend()
+    ax.grid(True)
+    plt.tight_layout()
+
+    if save_plot:
+        os.makedirs(os.path.dirname(plot_path) or '.', exist_ok=True)
+        fig.savefig(plot_path)
+        if verbose: print(f"Plot saved to {plot_path}")
+
+    if display_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    if return_data:
+        df = pd.DataFrame({
+            f"{city1}_{statistic}_{units}": ts1,
+            f"{city2}_{statistic}_{units}": ts2,
+            f"{city3}_{statistic}_{units}": ts3
+        })
+        df.index.name = 'Time'
+        return df
+
+    if verbose: print("Done.")
+
+
 if __name__ == "__main__":
 
     city_dict = {
@@ -2039,6 +2343,80 @@ if __name__ == "__main__":
 
       # for category in categories:
     
+    # plot_city_comparison(
+    #     f'../metrics/albuquerque_metrics.parquet',
+    #     f'../metrics/anchorage_metrics.parquet',
+    #     city1='Albuquerque',
+    #     city2='Anchorage',
+    #     metric='Raw Number of Posts',
+    #     save_plot=True,
+    #     plot_path='../city_comparison_graphs/albuquerque_anchorage_post_count.png',
+    # )
+
+    # plot_city_comparison(
+    #     f'../metrics/coloradosprings_metrics.parquet',
+    #     f'../metrics/bakersfield_metrics.parquet',
+    #     city1='Colorado Springs',
+    #     city2='Bakersfield',
+    #     metric='Raw Number of Comments',
+    #     save_plot=True,
+    #     plot_path='../city_comparison_graphs/coloradosprings_baskersfield_comment_count.png',
+    # )
+
+    # plot_city_comparison(
+    #     f'../metrics/seattle_metrics.parquet',
+    #     f'../metrics/atlanta_metrics.parquet',
+    #     city1='Seattle',
+    #     city2='Atlanta',
+    #     metric='Percentage of Posts with Comments',
+    #     save_plot=True,
+    #     plot_path='../city_comparison_graphs/seattle_atlanta_comment_percentage.png',
+    # )
+
+    # plot_response_time_comparison(
+    #     '../metrics/charlotte_metrics.parquet',
+    #     '../metrics/baltimore_metrics.parquet',
+    #     city1='Charlotte',
+    #     city2='Baltimore',
+    #     resample_unit='W',
+    #     metric='Average Response Time with Cutoff (Minutes)',
+    #     time_diff_unit='minutes',
+    #     save_plot=True,
+    #     plot_path='../city_comparison_graphs/charlotte_baltimore_response_time.png',
+    # )
+
+    # plot_post_lifespan_three_way(
+    #     '../metrics/boise_metrics.parquet',
+    #     '../metrics/boston_metrics.parquet',
+    #     '../metrics/cincinnati_metrics.parquet',
+    #     city1='Boise',
+    #     city2='Boston',
+    #     city3='Cincinnati',
+    #     resample_unit='weekly',
+    #     metric='Post Lifespan (Mean in hours)',
+    #     units='hours',
+    #     statistic='mean',
+    #     save_plot=True,
+    #     plot_path='../city_comparison_graphs/boise_boston_cincinnati_lifespan.png'
+    # )
+
+    # plot_city_comparison(
+    #     '../metrics/losangeles_metrics.parquet',
+    #     '../metrics/lasvegas_metrics.parquet',
+    #     city1='Los Angeles',
+    #     city2='Las Vegas',
+    #     metric='Average Sentiment',
+    #     save_plot=True,
+    #     plot_path='../city_comparison_graphs/losangeles_lasvegas_average_sentiment.png',
+    # )
+
+
+    # metric = 'Average Response Time with Cutoff (Minutes)',
+    # metric='Post Lifespan (Mean in hours)',
+    # metric='Average Sentiment',
+    # metric='Positive Sentiment Count',
+    # metric='Negative Sentiment Count'
+
     #     plot_liwc_clusters_timeseries(
     #         f"../liwc_cluster_aggregated_metrics_normalised_smoothed/aggregated_{category}.parquet", 
     #         f"Clustered Intensities of LIWC {category} Category", "Intensity", 
@@ -2056,17 +2434,17 @@ if __name__ == "__main__":
     #         f"../liwc_universal_graphs_bigger_font/{category}_universal.png"
     #     )
 
-    # for category in universal_traj_categories:
-    #     print(category)
-    #     plot_word_shifts_from_parquet(
-    #         filepath=f'../liwc_word_shifts_normalised_universal/{category}_word_shifts.parquet',
-    #         category=category,
-    #         top_n=50,
-    #         save=True,
-    #         filename=f'../liwc_universal_word_shift_plots_bigger_font/{category}_word_shifts.png'
-    #     )
+    for category in universal_traj_categories:
+        print(category)
+        plot_word_shifts_from_parquet(
+            filepath=f'../liwc_word_shifts_normalised_universal/{category}_word_shifts.parquet',
+            category=category,
+            top_n=20,
+            save=True,
+            filename=f'../word_shifts_20/{category}_word_shifts.png'
+        )
     
-    generate_graphs_for_cities(city_dict)
+    # generate_graphs_for_cities(city_dict)
 
     # plot_us_cities_map_cartopy(
     #     city_dict,
