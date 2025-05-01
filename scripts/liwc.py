@@ -8,6 +8,8 @@ import json
 import statsmodels.api as sm
 from collections import Counter
 import itertools
+from pathlib import Path
+from typing import Union, Dict
 
 def load_liwc_dictionary(dictionary_path):
     liwc_dict = {}
@@ -506,6 +508,157 @@ def save_liwc_word_shift_metrics_for_categories(
         print(f"Saved {category} word shifts to {output_file}")
 
 
+def generate_cluster_texts(
+    cluster_file: Union[str, Path],
+    texts_dir: Union[str, Path],
+    output_dir: Union[str, Path]
+) -> None:
+    """
+    Reads a cluster assignment file (e.g. 'achieve_clusters.parquet') and a directory
+    of city text files ('<city>_texts.parquet'), then writes one output parquet
+    per cluster containing only the texts from cities in that cluster.
+
+    Parameters
+    ----------
+    cluster_file : Union[str, Path]
+        Path to a parquet file with columns ['City', 'Cluster'], where City entries
+        look like 'albuquerque_liwc'.
+    texts_dir : Union[str, Path]
+        Directory containing '<city_name>_texts.parquet' files, each with columns
+        ['text', 'created_utc'].
+    output_dir : Union[str, Path]
+        Directory where '<dimension>_cluster_<k>_texts.parquet' files will be written.
+    """
+    cluster_file = Path(cluster_file)
+    texts_dir = Path(texts_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    clusters = pd.read_parquet(cluster_file)
+    dimension = cluster_file.stem.replace("_clusters", "")
+
+    cluster_to_dfs = {c: [] for c in clusters["Cluster"].unique()}
+
+    for _, row in clusters.iterrows():
+        city_tag = row["City"]
+        cluster_id = row["Cluster"]
+
+        city_name = city_tag[:-5] if city_tag.endswith("_liwc") else city_tag
+        text_path = texts_dir / f"{city_name}_texts.parquet"
+
+        if not text_path.exists():
+            print(f"Warning: {text_path} not found; skipping.")
+            continue
+
+        df_texts = pd.read_parquet(text_path, columns=["text", "created_utc"])
+        cluster_to_dfs[cluster_id].append(df_texts)
+
+    for cluster_id, dfs in cluster_to_dfs.items():
+        if not dfs:
+            continue
+
+        combined = pd.concat(dfs, ignore_index=True)
+        out_path = output_dir / f"{dimension}_cluster_{cluster_id}_texts.parquet"
+        combined.to_parquet(out_path, index=False)
+        print(f"Wrote {len(combined)} rows to {out_path}")
+
+
+def get_cluster_liwc_word_shift_metrics_for_category(
+    liwc_dict: Dict[str, list],
+    category_map: Dict[str, str],
+    texts_dir: Union[str, Path],
+    category: str,
+    text_column: str = 'text',
+    date_cutoff: str = '2021-01-01',
+    top_n: int = 50
+) -> Dict[int, pd.DataFrame]:
+    """
+    For each cluster file named '{category}_cluster_{k}_texts.parquet' in texts_dir,
+    split into pre-/post- date_cutoff, count LIWC tokens for the given category,
+    normalize by total tokens, and compute percentage change.
+
+    Parameters
+    ----------
+    liwc_dict : dict
+        Mapping from token -> list of LIWC codes.
+    category_map : dict
+        Mapping from LIWC code -> category name.
+    texts_dir : str or Path
+        Folder containing '{category}_cluster_{k}_texts.parquet'.
+    category : str
+        The LIWC category to analyze (e.g. 'achieve').
+    text_column : str, default 'text'
+        Column in the parquet files that holds the raw text.
+    date_cutoff : str, default '2021-01-01'
+        ISO date string; all created_utc < date_cutoff are “pre”, >= date_cutoff “post”.
+    top_n : int, default 50
+        How many top words (by pre-period count) to include in each result.
+
+    Returns
+    -------
+    Dict[int, pd.DataFrame]
+        A mapping from cluster id (int) → DataFrame with columns
+        ['words','pre_disaster_frequency','disaster_frequency','percentage_change'].
+    """
+    texts_dir = Path(texts_dir)
+    cutoff = pd.Timestamp(date_cutoff)
+
+    target_codes = {code for code, cat in category_map.items()
+                    if cat.lower() == category.lower()}
+
+    results: Dict[int, pd.DataFrame] = {}
+
+    pattern = re.compile(rf"{re.escape(category)}_cluster_(\d+)_texts\.parquet$")
+    for fp in texts_dir.iterdir():
+        m = pattern.match(fp.name)
+        if not m:
+            continue
+
+        cluster_id = int(m.group(1))
+        df = pd.read_parquet(fp, columns=['created_utc', text_column])
+        df['created_datetime'] = pd.to_datetime(df['created_utc'], unit='s', errors='coerce')
+
+        pre_df = df[df['created_datetime'] < cutoff]
+        dis_df = df[df['created_datetime'] >= cutoff]
+
+        pre_counter = Counter()
+        dis_counter = Counter()
+        pre_total = 0
+        dis_total = 0
+
+        def extract_target_tokens(txt):
+            toks = txt.split()
+            return [t for t in toks for code in liwc_dict.get(t, [])
+                    if code in target_codes]
+        
+        for txt in pre_df[text_column].dropna():
+            all_toks = txt.split()
+            pre_total += len(all_toks)
+            pre_counter.update(extract_target_tokens(txt))
+
+        for txt in dis_df[text_column].dropna():
+            all_toks = txt.split()
+            dis_total += len(all_toks)
+            dis_counter.update(extract_target_tokens(txt))
+
+        rows = []
+        for word, pre_count in pre_counter.most_common(top_n):
+            dis_count = dis_counter.get(word, 0)
+            norm_pre = pre_count / pre_total if pre_total else 0
+            norm_dis = dis_count / dis_total if dis_total else 0
+            pct_change = ((norm_dis - norm_pre) / norm_pre * 100) if norm_pre else 0
+            rows.append({
+                'words': word,
+                'pre_disaster_frequency': norm_pre,
+                'disaster_frequency': norm_dis,
+                'percentage_change': pct_change
+            })
+
+        results[cluster_id] = pd.DataFrame(rows)
+
+    return results
+
+
 if __name__ == "__main__":
     liwc_dictionary_path = '../liwc/LIWC2007_English080730.dic'
     category_mapping_path = '../liwc/LIWC2007_Categories.txt'
@@ -626,6 +779,17 @@ if __name__ == "__main__":
         # "money"
     ]
 
+    distinct_traj_categories = [
+        "anger",
+        "cause",
+        "home",
+        "ingest",
+        "negemo",
+        "swear",
+        "time",
+        "we",
+    ]
+
     universal_traj_categories = [
         "anx",
         # "cause",
@@ -648,12 +812,33 @@ if __name__ == "__main__":
         "space"
     ]
 
-    save_liwc_word_shift_metrics_for_categories(
-        city_dict=city_dict,
-        categories=categories,
-        liwc_dictionary_path=liwc_dictionary_path,
-        category_mapping_path=category_mapping_path,
+    # save_liwc_word_shift_metrics_for_categories(
+    #     city_dict=city_dict,
+    #     categories=categories,
+    #     liwc_dictionary_path=liwc_dictionary_path,
+    #     category_mapping_path=category_mapping_path,
+    #     texts_dir="../liwc_texts",
+    #     output_dir="../liwc_word_shifts",
+    #     text_column='text'
+    # )
+
+    generate_cluster_texts(
+        cluster_file=f"../liwc_clusters_normalised_smoothed/cause_clusters.parquet",
         texts_dir="../liwc_texts",
-        output_dir="../liwc_word_shifts",
-        text_column='text'
+        output_dir="../liwc_distinct_trajectory_clustered_texts"
     )
+
+    # liwc_dict = load_liwc_dictionary(liwc_dictionary_path)
+    # category_map = load_category_mapping(category_mapping_path)
+    # metrics = get_cluster_liwc_word_shift_metrics_for_category(
+    #     liwc_dict=liwc_dict,
+    #     category_map=category_map,
+    #     texts_dir=Path('../liwc_distinct_trajectory_clustered_texts'),
+    #     category='anger'
+    # )
+
+    # # e.g. to inspect cluster 0:
+    # print(metrics[0].head())
+
+
+
